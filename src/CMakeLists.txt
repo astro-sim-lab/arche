@@ -1,0 +1,4 @@
+add_subdirectory(apps/collapse_primordial)
+add_subdirectory(apps/collapse_metal_grain)
+add_subdirectory(apps/chemistry_primordial)
+add_subdirectory(apps/chemistry_metal_grain)
