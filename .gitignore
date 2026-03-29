@@ -1,0 +1,32 @@
+# OS / editor artifacts
+.DS_Store
+Thumbs.db
+*.Zone.Identifier
+*~
+.vscode/
+
+# Build outputs
+*.o
+*.mod
+*.out
+build/
+
+# Runtime outputs
+results/
+
+# Python artifacts
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# Release staging area
+.dev/arche/
+
+# Block AI Related
+.github/*
+!.github/PULL_REQUEST_TEMPLATE.md
+.codex/
+.codex
+.claude/
+build-codex/
