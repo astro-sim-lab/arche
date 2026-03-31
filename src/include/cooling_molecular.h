@@ -177,6 +177,8 @@ double solve_esc_prob(
             if (esc[i] != 0.0 && desc[i] != 0.0)
                 fact = std::min(fact, 0.4 * std::abs(esc[i]/desc[i]));
         for (int i = 0; i < N_line; ++i) esc[i] += fact * desc[i];
+        for (int i = 0; i < N_line; ++i)
+            if (!std::isfinite(esc[i])) esc[i] = esc_min[i];
 
         // Convergence
         err_max = 0.0;
@@ -506,7 +508,7 @@ inline double cii_cool_fs(double xnH, double T_K, double y_e, double y_a,
                       * std::max(0.0, xNc_0*g1/g0 - xNc_1) / v_th;
 
         double num = g1*f_0/(g0*f_1) - 1.0;
-        double S_10 = (std::abs(num) < 1.0e-100) ? 1.0e50 : 1.0/num;
+        double S_10 = (!std::isfinite(num) || std::abs(num) < 1.0e-100) ? 1.0e50 : 1.0/num;
         f[0] = esc_10 - beta_esc(tau_10, tau_cnt);
         xLd_out = DE_10 * A_10 * f_1 * esc_10 * (1.0 - Q_10/S_10) / xnH;
     };
@@ -541,7 +543,7 @@ inline double cii_cool_meta(double xnH, double T_K, double y_e,
         double tau_10 = (A_10/(8.0*pi)) * std::pow(3.0e10/xnu, 3)
                       * std::max(0.0, xNc_0*g1/g0 - xNc_1) / v_th;
         double num = g1*f_0/(g0*f_1) - 1.0;
-        double S_10 = (std::abs(num) < 1.0e-100) ? 1.0e50 : 1.0/num;
+        double S_10 = (!std::isfinite(num) || std::abs(num) < 1.0e-100) ? 1.0e50 : 1.0/num;
         f[0] = esc_10 - beta_esc(tau_10, tau_cnt);
         xLd_out = DE_10 * A_10 * f_1 * esc_10 * (1.0 - Q_10/S_10) / xnH;
     };
@@ -618,7 +620,7 @@ inline double ci_cool_fs(double xnH, double T_K, double y_e, double y_a,
         auto S_fn = [](double gU, double gL, double fL, double fU) {
             if (fU == 0.0) return 1.0e50; // fU→0: source fn → ∞, Q/S → 0
             double n = gU*fL/(gL*fU)-1.0;
-            return (std::abs(n)<1.0e-100) ? 1.0e50 : 1.0/n;
+            return (!std::isfinite(n) || std::abs(n)<1.0e-100) ? 1.0e50 : 1.0/n;
         };
         double tau10=tau(A_10,DE_10,g1,g0,f_0,f_1);
         double tau20=tau(A_20,DE_20,g2,g0,f_0,f_2);
@@ -699,7 +701,7 @@ inline double oi_cool_fs(double xnH, double T_K, double y_e, double y_a,
         auto S_fn = [](double gU, double gL, double fL, double fU) {
             if (fU == 0.0) return 1.0e50; // fU→0: source fn → ∞, Q/S → 0
             double n = gU*fL/(gL*fU)-1.0;
-            return (std::abs(n)<1.0e-100) ? 1.0e50 : 1.0/n;
+            return (!std::isfinite(n) || std::abs(n)<1.0e-100) ? 1.0e50 : 1.0/n;
         };
         double tau10=tau(A_10,DE_10,g1,g0,f_0,f_1);
         double tau20=tau(A_20,DE_20,g2,g0,f_0,f_2);

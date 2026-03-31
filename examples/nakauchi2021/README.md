@@ -12,7 +12,7 @@ Reproduction scripts for comparing with figures (Figures 10a1, b1, c1, and d1) i
 | Parameter | Values |
 |---|---|
 | ζ₀ | 0 |
-| Z/Z☉ | 1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1 |
+| Z/Z☉ | 1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1e+0 |
 
 ## Usage
 

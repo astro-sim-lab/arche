@@ -320,9 +320,10 @@ inline void equichem_metal(double xnH, double T_K, double Z_metal,
     // Fortran y(58)=K_neutral, y(60)=Na_neutral, y(62)=Mg_neutral
     // C++ y[57]=K, y[59]=Na, y[61]=Mg  (species.h: K=57, Na=59, Mg=61)
     // Formula: K_neutral = K+ * y_e * xnH / Keqb(K_ion)
-    y[57] = xnH * y_e * y[58] / Keqb[700];  // K  (neutral) ← Keqb(701)
-    y[59] = xnH * y_e * y[60] / Keqb[702];  // Na (neutral) ← Keqb(703)
-    y[61] = xnH * y_e * y[62] / Keqb[717];  // Mg (neutral) ← Keqb(718)
+    // Guard: Keqb can underflow to 0 at low T → division by zero
+    y[57] = (Keqb[700] > 1.0e-300) ? xnH * y_e * y[58] / Keqb[700] : 0.0;
+    y[59] = (Keqb[702] > 1.0e-300) ? xnH * y_e * y[60] / Keqb[702] : 0.0;
+    y[61] = (Keqb[717] > 1.0e-300) ? xnH * y_e * y[62] / Keqb[717] : 0.0;
 }
 
 } // namespace detail
@@ -340,6 +341,8 @@ inline void equichem_metal(double xnH, double T_K, double Z_metal,
 //
 // Port of chemreact() in chemistry_metal.f.
 // ─────────────────────────────────────────────────────────────────────────────
+
+// TODO: define number of species and reactions
 template<>
 inline void chemreact<89, 1200>(
     double xnH, double T_K,
@@ -379,7 +382,8 @@ inline void chemreact<89, 1200>(
 
         compute_base_rates<89, 1200>(xnH, T_K, xmu, p_loc, tbl, xk);
 
-        for (int itr = 0; itr < 30; ++itr) {
+        // TODO: define max iterations
+        for (int itr = 0; itr < 60; ++itr) {
             r_f.fill(0.0);
             dr_fdy.fill(0.0);
 
@@ -410,6 +414,18 @@ inline void chemreact<89, 1200>(
                 y[isp]  += ddy[isp];
                 err_y   += std::abs(ddy[isp]);
             }
+            // Floor clamp: prevent cumulative negative drift
+            for (int isp = 0; isp < 89; ++isp)
+                y[isp] = std::max(y[isp], 0.0);
+
+            // Guard: NR divergence from near-singular Jacobian (specific Z/density
+            // combinations can make det(A)≈0, producing huge or non-finite ddy).
+            // Reset to initial state to prevent NaN propagation into xmu/gamma.
+            bool nr_ok = true;
+            for (int isp = 0; isp < 89 && nr_ok; ++isp)
+                if (!std::isfinite(y[isp]) || y[isp] > 1.0e50)
+                    nr_ok = false;
+            if (!nr_ok) { y = y_init; dy.fill(0.0); break; }
 
             if (err_y <= eps_y && err_fnc <= 1.0e-4) break;
         }
@@ -437,9 +453,10 @@ inline void chemreact<89, 1200>(
     double dyHepp  = dy[9];
 
     if (xnH < 1.0e13) {
-        double xn_cr = 1.0e6 / std::sqrt(T_K)
-                     / (1.6*y[0]*std::exp(-std::pow(400.0/T_K, 2.0))
-                       + 1.4*y[1]*std::exp(-12000.0/(T_K + 1200.0)));
+        double denom_cr = 1.6*y[0]*std::exp(-std::pow(400.0/T_K, 2.0))
+                        + 1.4*y[1]*std::exp(-12000.0/(T_K + 1200.0));
+        double xn_cr = (denom_cr > 1.0e-30)
+                     ? 1.0e6 / std::sqrt(T_K) / denom_cr : 1.0e50;
         double crit  = 1.0 / (1.0 + xn_cr/xnH);
 
         // Grain-catalysed H2 formation (5 channels, Fortran L206-209)
@@ -488,6 +505,9 @@ inline void chemreact<89, 1200>(
     } else {
         double dyH2 = dy[1];
         xL_H2  = -7.18e-12 * dyH2 / dt;
+        // Clamp to prevent extreme cooling from NR noise
+        constexpr double xL_H2_max = 1.0e20;
+        xL_H2 = std::max(-xL_H2_max, std::min(xL_H2, xL_H2_max));
         // dyHp, dyHep, dyHepp stay as dy[3], dy[8], dy[9]
     }
 
@@ -520,8 +540,9 @@ inline void chemcool<89, 1200>(
     constexpr double xk_B  = phys::xk_B;  // 1.380662e-16 erg/K (high-precision; unified in Phase 5)
     constexpr int    maxit  = 100;
 
-    auto func = [&](double t, double xLc) -> double {
-        return Tp - t - (gamma - 1.0) * xmu * xm_p * xLc * dt / xk_B;
+    // Residual using updated gamma/xmu from chemreact output
+    auto func = [&](double t, double g, double mu, double xLc) -> double {
+        return Tp - t - (g - 1.0) * mu * xm_p * xLc * dt / xk_B;
     };
 
     // First evaluation at Tp1 = Tp
@@ -529,7 +550,7 @@ inline void chemcool<89, 1200>(
     std::array<double, 89> ytmp = y;
     double xmu1 = xmu, gamma1 = gamma, xLmbdch1 = 0.0;
     chemreact<89, 1200>(xnH, Tp1, ytmp, dt, xmu1, gamma1, xLmbdch1, var, tbl, params);
-    double fL = func(Tp1, xLmbdch1);
+    double fL = func(Tp1, gamma1, xmu1, xLmbdch1);
 
     // Skip secant when xnH <= 1e16 AND Tp <= 1650 K
     // (metal_grain condition; inverse of zero_metal which skips at xnH > 1e16)
@@ -546,7 +567,7 @@ inline void chemcool<89, 1200>(
     ytmp = y;
     double xmu2 = xmu, gamma2 = gamma, xLmbdch2 = 0.0;
     chemreact<89, 1200>(xnH, Tp2, ytmp, dt, xmu2, gamma2, xLmbdch2, var, tbl, params);
-    double f = func(Tp2, xLmbdch2);
+    double f = func(Tp2, gamma2, xmu2, xLmbdch2);
 
     // Ensure |fL| >= |f|
     double TpL, Tpsec;
@@ -559,7 +580,11 @@ inline void chemcool<89, 1200>(
 
     // Secant iterations
     for (int i = 0; i < maxit; ++i) {
-        double dTp = (TpL - Tpsec) * f / (f - fL);
+        // Guard against f ≈ fL which causes division by zero → NaN
+        double df = f - fL;
+        if (std::abs(df) < 1.0e-30 * (std::abs(f) + std::abs(fL) + 1.0e-30))
+            break;
+        double dTp = (TpL - Tpsec) * f / df;
         TpL   = Tpsec;
         fL    = f;
         Tpsec += dTp;
@@ -567,7 +592,7 @@ inline void chemcool<89, 1200>(
         ytmp = y;
         chemreact<89, 1200>(xnH, Tpsec, ytmp, dt,
                             xmu1, gamma1, xLmbdch1, var, tbl, params);
-        f = func(Tpsec, xLmbdch1);
+        f = func(Tpsec, gamma1, xmu1, xLmbdch1);
 
         if (std::abs(f / Tpsec) <= 1.0e-7) break;
     }

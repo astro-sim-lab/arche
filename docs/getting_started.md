@@ -16,7 +16,14 @@ This document contains setup and detailed execution guidance moved out of `READM
 ## Build
 
 ```bash
-cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=icpx -DCMAKE_C_COMPILER=icx # Intel Compiler
+cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j$(nproc)
+```
+
+### Intel compiler (optional)
+
+```bash
+cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=icpx -DCMAKE_C_COMPILER=icx
 cmake --build build -j$(nproc)
 ```
 

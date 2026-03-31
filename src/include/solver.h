@@ -19,7 +19,7 @@
 #include <cstring>
 
 #ifdef CHEMISTRY_USE_EIGEN
-#  include <Eigen/Dense>
+  #include <Eigen/Dense>
 #endif
 
 namespace chemistry {
@@ -36,6 +36,9 @@ void gaussj_solve(std::array<double, N*N>& a, std::array<double, N>& b)
     Eigen::Map<Eigen::Matrix<double, N, N, Eigen::RowMajor>> A(a.data());
     Eigen::Map<Eigen::Matrix<double, N, 1>> x(b.data());
     x = A.partialPivLu().solve(x);
+    // Guard: near-singular A produces Inf/NaN in x; zero out to prevent
+    // NaN propagation through the chemistry network.
+    if (!x.allFinite()) x.setZero();
 #else
     constexpr double eps = numerics::eps_gaussj;
     std::array<int, N> indxc{}, indxr{}, ipiv{};
@@ -74,7 +77,12 @@ void gaussj_solve(std::array<double, N*N>& a, std::array<double, N>& b)
         indxr[i] = irow;
         indxc[i] = icol;
 
-        if (a[icol*N + icol] == 0.0) { singular = true; break; }
+        if (a[icol*N + icol] == 0.0) {
+            // Pivot is zero (matrix is singular): return zero update to prevent
+            // NaN/Inf propagation from a partial-elimination state in b[].
+            b.fill(0.0);
+            return;
+        }
 
         double pivinv = 1.0 / a[icol*N + icol];
         a[icol*N + icol] = 1.0;
@@ -85,13 +93,8 @@ void gaussj_solve(std::array<double, N*N>& a, std::array<double, N>& b)
             if (ll != icol) {
                 double dum = a[ll*N + icol];
                 a[ll*N + icol] = 0.0;
-                for (int l = 0; l < N; ++l) {
+                for (int l = 0; l < N; ++l)
                     a[ll*N + l] -= a[icol*N + l] * dum;
-                    // Flush near-zero fill-in
-                    double ref = std::abs(a[icol*N+l] * dum);
-                    if (ref != 0.0 && std::abs(a[ll*N+l]) / ref < eps)
-                        a[ll*N+l] = 0.0;
-                }
                 double ref_b = std::abs(b[icol] * dum);
                 b_max[ll] = std::max(b_max[ll], ref_b);
                 b[ll] -= b[icol] * dum;
@@ -99,6 +102,12 @@ void gaussj_solve(std::array<double, N*N>& a, std::array<double, N>& b)
                     b[ll] = 0.0;
             }
         }
+    }
+
+    if (singular) {
+        // ipiv[k] > 1 path: pivot-tracking logic error.  Return zero update.
+        b.fill(0.0);
+        return;
     }
 
     // Flush residual noise in solution vector
@@ -375,6 +384,9 @@ void chemreact(double xnH, double T_K,
                 y[isp]  += ddy[isp];
                 err_y   += std::abs(ddy[isp]);
             }
+            // Floor clamp: prevent cumulative negative drift
+            for (int isp = 0; isp < N_sp; ++isp)
+                y[isp] = std::max(y[isp], 0.0);
 
             if (err_y <= eps_y && err_fnc <= 1.0e-4) break;
         }
@@ -401,9 +413,10 @@ void chemreact(double xnH, double T_K,
 
     if (xnH < 1.0e13) {
         // H2 formation/dissociation cooling
-        double xn_cr = 1.0e6 / std::sqrt(T_K)
-                     / (1.6*y[0]*std::exp(-std::pow(400.0/T_K, 2.0))
-                       + 1.4*y[1]*std::exp(-12000.0/(T_K + 1200.0)));
+        double denom_cr = 1.6*y[0]*std::exp(-std::pow(400.0/T_K, 2.0))
+                        + 1.4*y[1]*std::exp(-12000.0/(T_K + 1200.0));
+        double xn_cr = (denom_cr > 1.0e-30)
+                     ? 1.0e6 / std::sqrt(T_K) / denom_cr : 1.0e50;
         double crit  = 1.0 / (1.0 + xn_cr/xnH);
 
         // H- + H → H2 + e  (reaction 8, 0-based: xk[7])
@@ -436,6 +449,9 @@ void chemreact(double xnH, double T_K,
     } else {
         double dyH2 = dy[1];
         xL_H2  = -7.18e-12 * dyH2 / dt;
+        // Clamp to prevent extreme cooling from NR noise
+        constexpr double xL_H2_max = 1.0e20;
+        xL_H2 = std::max(-xL_H2_max, std::min(xL_H2, xL_H2_max));
     }
 
     // Specific cooling rate [erg g^-1 s^-1]
@@ -463,9 +479,9 @@ void chemcool(double xnH, double Tp,
     constexpr double xk_B  = phys::xk_B;  // 1.380662e-16 erg/K (high-precision; unified in Phase 5)
     constexpr int    maxit  = 100;
 
-    // Residual: f(T) = Tp - T - (γ-1)*μ*mp*Λ*dt/kB
-    auto func = [&](double t, double xLc) -> double {
-        return Tp - t - (gamma - 1.0) * xmu * xm_p * xLc * dt / xk_B;
+    // Residual using updated gamma/xmu from chemreact output
+    auto func = [&](double t, double g, double mu, double xLc) -> double {
+        return Tp - t - (g - 1.0) * mu * xm_p * xLc * dt / xk_B;
     };
 
     // First evaluation at Tp1 = Tp
@@ -473,7 +489,7 @@ void chemcool(double xnH, double Tp,
     std::array<double, N_sp> ytmp = y;
     double xmu1 = xmu, gamma1 = gamma, xLmbdch1 = 0.0;
     chemreact<N_sp, N_react>(xnH, Tp1, ytmp, dt, xmu1, gamma1, xLmbdch1, var, tbl, params);
-    double fL = func(Tp1, xLmbdch1);
+    double fL = func(Tp1, gamma1, xmu1, xLmbdch1);
 
     // Skip secant if low-temperature dense condition
     if (xnH > 1.0e16 && Tp <= 1.65e3) {
@@ -489,7 +505,7 @@ void chemcool(double xnH, double Tp,
     ytmp = y;
     double xmu2 = xmu, gamma2 = gamma, xLmbdch2 = 0.0;
     chemreact<N_sp, N_react>(xnH, Tp2, ytmp, dt, xmu2, gamma2, xLmbdch2, var, tbl, params);
-    double f = func(Tp2, xLmbdch2);
+    double f = func(Tp2, gamma2, xmu2, xLmbdch2);
 
     // Ensure |fL| >= |f|  (larger residual at TpL)
     double TpL, Tpsec;
@@ -502,7 +518,11 @@ void chemcool(double xnH, double Tp,
 
     // Secant iterations
     for (int i = 0; i < maxit; ++i) {
-        double dTp = (TpL - Tpsec) * f / (f - fL);
+        // Guard against f ≈ fL which causes division by zero → NaN
+        double df = f - fL;
+        if (std::abs(df) < 1.0e-30 * (std::abs(f) + std::abs(fL) + 1.0e-30))
+            break;
+        double dTp = (TpL - Tpsec) * f / df;
         TpL  = Tpsec;
         fL   = f;
         Tpsec += dTp;
@@ -510,7 +530,7 @@ void chemcool(double xnH, double Tp,
         ytmp = y;
         chemreact<N_sp, N_react>(xnH, Tpsec, ytmp, dt,
                                  xmu1, gamma1, xLmbdch1, var, tbl, params);
-        f = func(Tpsec, xLmbdch1);
+        f = func(Tpsec, gamma1, xmu1, xLmbdch1);
 
         if (std::abs(f / Tpsec) <= 1.0e-7) break;
     }
