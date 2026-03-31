@@ -59,13 +59,16 @@ inline void vaptemp(double rho_in,
           1.277e3, 1.408e3, 1.570e3, 1.774e3 }
     };
 
-    // Linear interpolation in log-rho space (clamp at edges)
+    // Interpolation in log10(rho) space (nodes are log-spaced: 1e-18..1e-4, step 2 dex)
     auto interp = [&](const double* tab) -> double {
         if (rho_in <= ro[0]) return tab[0];
         if (rho_in >= ro[7]) return tab[7];
+        double lr = std::log10(rho_in);
         for (int j = 0; j < 7; ++j) {
-            if (rho_in >= ro[j] && rho_in <= ro[j+1]) {
-                double frac = (rho_in - ro[j]) / (ro[j+1] - ro[j]);
+            double lr_j  = -18.0 + 2.0 * j;
+            double lr_j1 = lr_j + 2.0;
+            if (lr >= lr_j && lr <= lr_j1) {
+                double frac = (lr - lr_j) / 2.0;
                 return tab[j] + frac * (tab[j+1] - tab[j]);
             }
         }

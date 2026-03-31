@@ -635,7 +635,7 @@ void RunCollapse(double zeta0, const std::string& cr_tag,
                 switch_gr = 2;
 
             } else {
-                double gr_frac = (vol_old > 0.0) ? vol_cur / vol_old : 1.0;
+                double gr_frac = (vol_old > 1.0e-60) ? std::min(vol_cur / vol_old, 1.0) : 1.0;
 
                 if (T_K >= 0.975 * T_pyr) {
                     // Partial evaporation of grain charges and alkali elements
@@ -717,7 +717,9 @@ void RunCollapse(double zeta0, const std::string& cr_tag,
         double de   = -xLmbd_net * dt + drho * p / (rho * rho);
         rho  += drho;
         e    += de;
+        if (e <= 0.0) break;  // catch before T_K goes negative
         T_K   = e * ((gamma - 1.0) * xmu * kMp) / kKB;
+        T_K   = std::max(T_K, 1.0);
         p     = rho * kKB * T_K / (xmu * kMp);
         xnH   = rho / ((1.0 + 4.0*abund.yHe) * kMp);
         t    += dt;
@@ -727,7 +729,8 @@ void RunCollapse(double zeta0, const std::string& cr_tag,
         if (it <= n_init_steps)
             dt = dt_factor_init * t_eff;
         else
-            dt = dt_factor * std::min(t_cool, t_eff);
+            //dt = dt_factor * std::min({t_cool, t_eff, t_chem});
+            dt = dt_factor * std::min({t_cool, t_eff});
 
         // ── Progress ──────────────────────────────────────────────────────────
         std::printf("%7d %11.3E %11.3E %11.3E %11.3E %11.3E %11.3E"

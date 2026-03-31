@@ -1,5 +1,6 @@
 #pragma once
 #include <array>
+#include <cmath>
 #include <limits>
 #include "species.h"
 
@@ -156,6 +157,7 @@ namespace numerics {
     constexpr double eps_it_metal = 1.0e-5;
     constexpr double eps_y = 1.0e-10;
     constexpr double xnH_eq = 1.0e18;
+
 } // namespace numerics
 
 namespace model {

@@ -592,7 +592,16 @@ fi
 make_tag() {
     awk -v val="$1" 'BEGIN {
         if (val+0 == 0.0) { print "0" }
-        else { gsub(/\./, "p", val); print val }
+        else if (val ~ /[eE]/) { gsub(/\./, "p", val); print val }
+        else {
+            x = val + 0
+            e = 0
+            if (x >= 10)    { while (x >= 10) { x /= 10; e++ } }
+            else if (x < 1) { while (x < 1)   { x *= 10; e-- } }
+            x = int(x * 1e9 + 0.5) / 1e9
+            if (x == int(x)) { printf "%de%+d\n", int(x+0.5), e }
+            else { m = sprintf("%g", x); gsub(/\./, "p", m); printf "%se%+d\n", m, e }
+        }
     }'
 }
 

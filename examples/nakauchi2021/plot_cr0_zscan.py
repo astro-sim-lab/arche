@@ -44,7 +44,7 @@ Z_VALUES = [
     ("1e-3", r"$Z = 10^{-3}\,Z_\odot$"),
     ("1e-2", r"$Z = 10^{-2}\,Z_\odot$"),
     ("1e-1", r"$Z = 10^{-1}\,Z_\odot$"),
-    ("1",    r"$Z = 1\,Z_\odot$"),
+    ("1e+0", r"$Z = 1\,Z_\odot$"),
 ]
 
 # viridis: high value = yellow (Z=1e-6), low value = dark purple/black (Z=1)

@@ -19,8 +19,8 @@ For setup and full usage details, see:
 - `docs/api_reference.md`
 - `docs/output_schema.md`
 
-Auxiliary tool (WIP):
-- `tools/eos_mhd_table_generator/README.md` (EOS-MHD table generator for MHD workflows)
+Official companion tool:
+- [ResiTable](https://github.com/astro-sim-lab/resitable)
 
 ---
 
