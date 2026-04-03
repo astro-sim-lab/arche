@@ -13,6 +13,7 @@ build/
 
 # Runtime outputs
 results/
+.dev/reference/fortran/metal_grain/test/
 
 # Python artifacts
 __pycache__/
@@ -24,8 +25,6 @@ __pycache__/
 .dev/arche/
 
 # Block AI Related
-AGENTS.md
-CLAUDE.md
 .github/*
 !.github/PULL_REQUEST_TEMPLATE.md
 .codex/

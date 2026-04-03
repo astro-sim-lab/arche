@@ -11,6 +11,10 @@
 //                         Rows sorted by ascending nH; comments with '#' allowed.
 //                         If set, PRIM_FF_RET is ignored.  fret_tag = "-step"
 //                         → output: collapse_CR<tag>_fret-step.h5
+//   PRIM_FF_GAMMA       — gamma-dependent collapse factor (flag; set to 1 to enable)
+//                         Uses t_eff = t_ff / sqrt(1−f(γ))  (Higuchi+2018 Eq.5-7)
+//                         Overrides PRIM_FF_RET and PRIM_FRET_TABLE.
+//                         fret_tag = "-gamma"  → output: collapse_CR<tag>_fret-gamma.h5
 //   PRIM_XNH0           — initial H number density [cm^-3] (optional, default: 0.1)
 //   PRIM_OUTPUT_STRIDE  — write every N-th step to HDF5  (optional, default: 100)
 //   PRIM_MAX_ITER       — maximum integration steps       (optional, default: 10000000)
@@ -29,6 +33,7 @@
 //     zeta0_cgs     — CR ionization rate [s^-1]
 //     f_ret         — free-fall retardation factor (initial value; 1.0 = standard free-fall)
 //     f_ret_table   — path to f_ret step-function table file (absent if not used)
+//     ff_collapse_mode — "gamma" when PRIM_FF_GAMMA mode is active (absent otherwise)
 //     network       — "zero_metal N_sp=23 N_react=140"
 //     units_density — "cm^-3 (xnH), g/cm^3 (rho)"
 //     units_cooling — "erg g^-1 s^-1"
@@ -82,6 +87,7 @@
 #include "hdf5_utils.h"
 
 #include "chemistry.h"
+#include "collapse_dynamics.h"
 
 namespace {
 
@@ -189,7 +195,8 @@ void WriteHdf5File(hid_t fid, const std::string& cr_tag,
                    double T_K0_ic, double y_e0_ic,
                    double y_H2_ic, double y_HD_ic,
                    double jlw21 = 0.0,
-                   const std::string& fret_table_path = "")
+                   const std::string& fret_table_path = "",
+                   bool ff_gamma = false)
 {
     const hsize_t N   = static_cast<hsize_t>(rows.size());
     const hsize_t Nsp = static_cast<hsize_t>(kNSp);
@@ -207,6 +214,8 @@ void WriteHdf5File(hid_t fid, const std::string& cr_tag,
     H5WriteDblAttr(fid, "f_ret",         f_ret);
     if (!fret_table_path.empty())
         H5WriteStrAttr(fid, "f_ret_table", fret_table_path);
+    if (ff_gamma)
+        H5WriteStrAttr(fid, "ff_collapse_mode", "gamma");
     H5WriteDblAttr(fid, "zred",          zred);
     H5WriteDblAttr(fid, "T_rad",         T_rad);
     H5WriteDblAttr(fid, "J_LW21",        jlw21);
@@ -281,13 +290,14 @@ void WriteHdf5File(hid_t fid, const std::string& cr_tag,
 // Writes:  <out_dir>/collapse_CR<tag>.h5
 //          <out_dir>/collapse_CR<tag>_fret<fr>.h5         (f_ret != 1.0)
 //          <out_dir>/collapse_CR<tag>_fret<fr>_JLW<jlw>.h5  (+ J_LW21 != 0)
+//          <out_dir>/collapse_CR<tag>_fret-gamma.h5       (ff_gamma mode)
 //          suffix order: _fret → _JLW → _z
 //
-// f_ret (free-fall retardation factor): scales the effective collapse
-// timescale as t_eff = f_ret * t_ff.  f_ret > 1 slows the collapse;
-// f_ret = 1 (default) gives standard free-fall.  Affects: density
-// update (drho), compressional heating (Γ_cmp), shielding lengths
-// (xlsh) and the integration timestep (dt).
+// Collapse timescale modes (selected by ff_gamma and fret_tag):
+//   (A/B) ff_gamma=false:  t_eff = f_ret * t_ff  (fixed or step-function f_ret)
+//   (C)   ff_gamma=true:   t_eff = t_ff / sqrt(1-f(γ))  (Higuchi+2018 Eq.5-7)
+// Affects: density update (drho), compressional heating (Γ_cmp),
+// shielding lengths (xlsh), and the integration timestep (dt).
 // ─────────────────────────────────────────────────────────────────────────────
 void RunCollapse(double y_e0, double T_K0, double y_H2_init, double y_HD_init,
                  double zeta0, double xnH1,
@@ -308,7 +318,8 @@ void RunCollapse(double y_e0, double T_K0, double y_H2_init, double y_HD_init,
                  int n_init_steps   = kNInitSteps,
                  double xnH_stop    = kXnHStop,
                  int output_stride = kOutputStride,
-                 int max_iter      = kItMax)
+                 int max_iter      = kItMax,
+                 bool ff_gamma     = false)
 {
     // ── Initial conditions ────────────────────────────────────────────────────
     const double kT1 = T_K0;        // initial temperature [K]
@@ -391,7 +402,7 @@ void RunCollapse(double y_e0, double T_K0, double y_H2_init, double y_HD_init,
         }
 
         double t_ff  = std::sqrt(3.0*kPi / (32.0*kGGrav*rho));
-        double t_eff = f_ret * t_ff;   // effective collapse timescale [s]
+        double t_eff = t_eff_collapse(t_ff, f_ret, gamma, ff_gamma);
 
         double vD_H  = std::sqrt(2.0*kKB*T_K / kMp);
         double vD_H2 = std::sqrt(2.0*kKB*T_K / (kMp * 2.0));
@@ -532,7 +543,7 @@ void RunCollapse(double y_e0, double T_K0, double y_H2_init, double y_HD_init,
     }
     WriteHdf5File(fid, cr_tag, h5rows, zeta0, f_ret_init, T_rad, zred,
                   T_K0, y_e0, y_H2_init, y_HD_init,
-                  jlw21, fret_table_path);
+                  jlw21, fret_table_path, ff_gamma);
     H5Fclose(fid);
 
     std::printf("  -> %s  (%zu rows)\n", h5_path.c_str(), h5rows.size());
@@ -633,13 +644,31 @@ int main()
         fret_val = std::move(fv);
     }
 
+    // ── Optional: PRIM_FF_GAMMA (gamma-dependent collapse factor; highest priority) ──
+    // When set (non-empty, non-"0"), uses t_eff = t_ff / sqrt(1-f(γ))  [Higuchi+2018 Eq.5-7].
+    // Overrides PRIM_FF_RET and PRIM_FRET_TABLE.
+    const char* env_ff_gamma = std::getenv("PRIM_FF_GAMMA");
+    const bool  ff_gamma = (env_ff_gamma && env_ff_gamma[0] != '\0'
+                             && env_ff_gamma[0] != '0');
+
     // ── Optional: PRIM_FF_RET (free-fall retardation factor, default 1.0) ────
     // f_ret > 1 slows the collapse; f_ret = 1 gives standard free-fall.
-    // Ignored when PRIM_FRET_TABLE is set.
+    // Ignored when PRIM_FRET_TABLE or PRIM_FF_GAMMA is set.
     const char* env_fret = std::getenv("PRIM_FF_RET");
     double f_ret = 1.0;
     std::string fret_tag;   // empty → no suffix in filename
-    if (!fret_table_path.empty()) {
+    if (ff_gamma) {
+        // Gamma mode: tag "-gamma"; warn if other fret options were also supplied
+        fret_tag = "-gamma";
+        if (!fret_table_path.empty())
+            std::fprintf(stderr,
+                "WARNING: PRIM_FF_GAMMA is set; PRIM_FRET_TABLE='%s' is ignored\n",
+                env_fret_table);
+        if (env_fret && env_fret[0] != '\0')
+            std::fprintf(stderr,
+                "WARNING: PRIM_FF_GAMMA is set; PRIM_FF_RET='%s' is ignored\n",
+                env_fret);
+    } else if (!fret_table_path.empty()) {
         // Table mode: initial f_ret from first table entry; fixed tag "-step"
         // → output filename: collapse_CR<tag>_fret-step.h5
         f_ret    = fret_val[0];
@@ -920,7 +949,7 @@ int main()
         }
     }
 
-    std::printf("=== PRIM_ZETA0=%s  tag=%s  f_ret=%g  fret_tag=%s"
+    std::printf("=== PRIM_ZETA0=%s  tag=%s  f_ret=%g  fret_tag=%s  ff_gamma=%d"
                 "  PRIM_REDSHIFT=%g  T_rad=%g K"
                 "  abund=%s"
                 "  J_LW21=%g  xnH0=%g"
@@ -928,13 +957,13 @@ int main()
                 "  stride=%d  max_iter=%d"
                 "  cr_col=%g  dt_factor=%g  dt_factor_init=%g"
                 "  n_init=%d  xnH_stop=%g ===\n",
-                env_zeta0, cr_tag.c_str(), f_ret, fret_tag.c_str(),
+                env_zeta0, cr_tag.c_str(), f_ret, fret_tag.c_str(), (int)ff_gamma,
                 zred, T_rad, abund.name, jlw21, xnH0,
                 T_K0, ye0, y_H2_init, y_HD_init,
                 output_stride, max_iter,
                 cr_atten_col_dens, dt_factor, dt_factor_init,
                 n_init_steps, xnH_stop);
-    if (!fret_table_path.empty())
+    if (!fret_table_path.empty() && !ff_gamma)
         std::printf("  fret_table: %s  (%zu rows)\n",
                     fret_table_path.c_str(), fret_nH.size());
     RunCollapse(ye0, T_K0, y_H2_init, y_HD_init,
@@ -943,7 +972,7 @@ int main()
                 jlw21, jlw_tag, cr_atten_col_dens,
                 fret_nH, fret_val, fret_table_path,
                 dt_factor, dt_factor_init, n_init_steps, xnH_stop,
-                output_stride, max_iter);
+                output_stride, max_iter, ff_gamma);
 
     return 0;
 }

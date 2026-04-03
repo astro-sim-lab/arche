@@ -23,8 +23,9 @@ Precedence in `run_collapse.sh` is:
 |---|---|---|---|
 | `PRIM_ZETA0` | **yes** | — | CR ionization rate ζ₀ [s⁻¹].  Example: `1e-17` |
 | `PRIM_OUTDIR` | no | `results/prim/h5` | Output directory for HDF5 files |
-| `PRIM_FF_RET` | no | `1.0` | Free-fall retardation factor f_ret.  `1.0` = standard free-fall; `> 1` slows collapse.  Ignored when `PRIM_FRET_TABLE` is set |
-| `PRIM_FRET_TABLE` | no | *(unset)* | Path to a 2-column ASCII table `nH [cm⁻³]  f_ret` (step-function, ratchet-forward).  When set, overrides `PRIM_FF_RET`; filename gets `_fret-step` suffix |
+| `PRIM_FF_RET` | no | `1.0` | Free-fall retardation factor f_ret.  `1.0` = standard free-fall; `> 1` slows collapse.  Ignored when `PRIM_FRET_TABLE` or `PRIM_FF_GAMMA` is set |
+| `PRIM_FRET_TABLE` | no | *(unset)* | Path to a 2-column ASCII table `nH [cm⁻³]  f_ret` (step-function, ratchet-forward).  When set, overrides `PRIM_FF_RET`; filename gets `_fret-step` suffix.  Ignored when `PRIM_FF_GAMMA` is set |
+| `PRIM_FF_GAMMA` | no | *(unset)* | Enable gamma-dependent collapse factor (flag; set to `1`).  Uses `t_eff = t_ff / sqrt(1−f(γ))` (Higuchi+2018 Eq.5-7).  Overrides `PRIM_FF_RET` and `PRIM_FRET_TABLE`; filename gets `_fret-gamma` suffix |
 | `PRIM_XNH0` | no | `0.1` | Initial H number density [cm⁻³] |
 | `PRIM_TK0` | no | `100.0` | Initial gas temperature [K] |
 | `PRIM_YE0` | no | `1e-4` | Initial electron fraction y(e⁻) = y(H⁺).  Must be in [0, 1) |
@@ -64,6 +65,16 @@ PRIM_FRET_TABLE=data/fret_table/fret_step_sample.dat \
 
 Output file: `results/prim/h5/collapse_CR1e-17_fret-step.h5`
 
+**Example — gamma-dependent collapse factor**
+
+```bash
+PRIM_ZETA0=1e-17 \
+PRIM_FF_GAMMA=1 \
+./build/src/apps/collapse_primordial/prim_collapse
+```
+
+Output file: `results/prim/h5/collapse_CR1e-17_fret-gamma.h5`
+
 Table file format (`data/fret_table/fret_step_sample.dat`):
 
 ```
@@ -84,8 +95,9 @@ Lines beginning with `#` are comments.  Rows must be in ascending `nH` order.
 | `METAL_ZETA0` | **yes** | — | CR ionization rate ζ₀ [s⁻¹] |
 | `METAL_Z_METAL` | **yes** | — | Metallicity Z [Z☉].  Example: `1e-3` |
 | `METAL_OUTDIR` | no | `results/metal/h5` | Output directory for HDF5 files |
-| `METAL_FF_RET` | no | `1.0` | Free-fall retardation factor.  Ignored when `METAL_FRET_TABLE` is set |
-| `METAL_FRET_TABLE` | no | *(unset)* | Path to a 2-column ASCII table `nH [cm⁻³]  f_ret` (step-function, ratchet-forward).  When set, overrides `METAL_FF_RET`; filename gets `_fret-step` suffix |
+| `METAL_FF_RET` | no | `1.0` | Free-fall retardation factor.  Ignored when `METAL_FRET_TABLE` or `METAL_FF_GAMMA` is set |
+| `METAL_FRET_TABLE` | no | *(unset)* | Path to a 2-column ASCII table `nH [cm⁻³]  f_ret` (step-function, ratchet-forward).  When set, overrides `METAL_FF_RET`; filename gets `_fret-step` suffix.  Ignored when `METAL_FF_GAMMA` is set |
+| `METAL_FF_GAMMA` | no | *(unset)* | Enable gamma-dependent collapse factor (flag; set to `1`).  Uses `t_eff = t_ff / sqrt(1−f(γ))` (Higuchi+2018 Eq.5-7).  Overrides `METAL_FF_RET` and `METAL_FRET_TABLE`; filename gets `_fret-gamma` suffix |
 | `METAL_XNH0` | no | `1.0` | Initial H number density [cm⁻³] |
 | `METAL_TK0` | no | `100.0` | Initial gas temperature [K] |
 | `METAL_YE0` | no | `1e-4` | Initial electron fraction y(e⁻) = y(H⁺).  Must be in [0, 1) |
@@ -210,6 +222,7 @@ Run from the project root.
 | `--common-zeta0` | VALUE | from config (`COMMON_ZETA0`) | Shared CR rate for primordial + metal-grain [s⁻¹] |
 | `--common-ff-ret` | VALUE | from config (`COMMON_FF_RET`) | Shared free-fall retardation factor (> 0) |
 | `--common-fret-table` | FILE | from config (`COMMON_FRET_TABLE`) | Shared f_ret step-function table |
+| `--common-ff-gamma` | — | from config (`COMMON_FF_GAMMA`) | Enable gamma-dependent collapse factor for both runs (Higuchi+2018 Eq.5-7).  Overrides `--common-ff-ret` and `--common-fret-table` |
 | `--common-jlw21` | VALUE | from config (`COMMON_JLW21`) | Shared Lyman-Werner J₂₁ |
 | `--common-redshift` | VALUE | from config (`COMMON_REDSHIFT`) | Shared cosmological redshift |
 | `--common-tk0` | VALUE | from config (`COMMON_TK0`) | Shared initial gas temperature [K] |
@@ -229,10 +242,12 @@ Run from the project root.
 | `--prim-zeta0` | VALUE | *(required unless `--no-prim`)* | Primordial CR rate [s⁻¹] |
 | `--metal-zeta0` | VALUE | *(required unless `--no-metal`)* | Metal-grain CR rate [s⁻¹] |
 | `--metal-z-metal` | VALUE | *(required unless `--no-metal`)* | Metallicity [Z☉] |
-| `--prim-ff-ret` | VALUE | `1.0` | Primordial free-fall retardation factor (> 0).  Ignored when `--prim-fret-table` is given |
-| `--prim-fret-table` | FILE | *(unset)* | Path to prim f_ret step-function table.  Sets `PRIM_FRET_TABLE`; output gets `_fret-step` suffix |
-| `--metal-ff-ret` | VALUE | `1.0` | Metal-grain free-fall retardation factor (> 0).  Ignored when `--metal-fret-table` is given |
-| `--metal-fret-table` | FILE | *(unset)* | Path to metal f_ret step-function table.  Sets `METAL_FRET_TABLE`; output gets `_fret-step` suffix |
+| `--prim-ff-ret` | VALUE | `1.0` | Primordial free-fall retardation factor (> 0).  Ignored when `--prim-fret-table` or `--prim-ff-gamma` is given |
+| `--prim-fret-table` | FILE | *(unset)* | Path to prim f_ret step-function table.  Sets `PRIM_FRET_TABLE`; output gets `_fret-step` suffix.  Ignored when `--prim-ff-gamma` is given |
+| `--prim-ff-gamma` | — | *(unset)* | Enable gamma-dependent collapse factor for primordial run.  Output gets `_fret-gamma` suffix.  Overrides `--prim-ff-ret` and `--prim-fret-table` |
+| `--metal-ff-ret` | VALUE | `1.0` | Metal-grain free-fall retardation factor (> 0).  Ignored when `--metal-fret-table` or `--metal-ff-gamma` is given |
+| `--metal-fret-table` | FILE | *(unset)* | Path to metal f_ret step-function table.  Sets `METAL_FRET_TABLE`; output gets `_fret-step` suffix.  Ignored when `--metal-ff-gamma` is given |
+| `--metal-ff-gamma` | — | *(unset)* | Enable gamma-dependent collapse factor for metal-grain run.  Output gets `_fret-gamma` suffix.  Overrides `--metal-ff-ret` and `--metal-fret-table` |
 | `--prim-jlw21` | VALUE | `0.0` | Lyman-Werner J₂₁ for primordial run [10⁻²¹ erg/s/cm²/Hz/sr] |
 | `--metal-jlw21` | VALUE | `0.0` | Lyman-Werner J₂₁ for metal-grain run |
 | `--prim-redshift` | VALUE | `0.0` | Cosmological redshift for primordial run |
@@ -272,8 +287,8 @@ Run from the project root.
 | `--metal-mg-gas-frac` | VALUE | from config (`METAL_MG_GAS_FRAC`) | Initial Mg gas-phase fraction ([0, 1]) |
 | `--metal-data-dir` | DIR | from config (`METAL_DATA_DIR` or `COMMON_DATA_DIR`) | Metal-grain reaction data directory |
 | `--build-dir` | DIR | from config (`BUILD_DIR`, fallback `build`) | CMake build directory |
-| `--out-dir` | DIR | from config (`OUT_DIR`, fallback `results/`) | Root for HDF5 output (`DIR/primordial/`, `DIR/metal_grain/`) |
-| `--save-dir` | DIR | from config (`SAVE_DIR`, fallback `results/`) | Root for figure output (`DIR/primordial/`, `DIR/metal_grain/`) |
+| `--out-dir` | DIR | from config (`OUT_DIR`, fallback `results`) | Root for HDF5 output (`DIR/primordial/`, `DIR/metal_grain/`) |
+| `--save-dir` | DIR | from config (`SAVE_DIR`, fallback `results`) | Root for figure output (`DIR/primordial/`, `DIR/metal_grain/`) |
 | `--config` | FILE | `params/default.conf` | Parameter file path |
 | `--no-config` | — | — | Disable parameter file loading |
 | `--no-build` | — | — | Skip CMake build step |
@@ -302,6 +317,7 @@ Policy:
 | `COMMON_ZETA0` | Shared CR ionization rate (`PRIM_ZETA0`, `METAL_ZETA0`) |
 | `COMMON_FF_RET` | Shared free-fall retardation (`PRIM_FF_RET`, `METAL_FF_RET`) |
 | `COMMON_FRET_TABLE` | Shared f_ret step-function table |
+| `COMMON_FF_GAMMA` | Enable gamma-dependent collapse factor for both runs (`PRIM_FF_GAMMA`, `METAL_FF_GAMMA`) |
 | `COMMON_JLW21` | Shared Lyman-Werner intensity |
 | `COMMON_REDSHIFT` | Shared cosmological redshift |
 | `COMMON_TK0` | Shared initial gas temperature |
@@ -361,6 +377,10 @@ bash run_collapse.sh --no-build --no-prim \
 # With free-fall retardation
 bash run_collapse.sh --prim-zeta0 1e-17 --prim-ff-ret 3.0 \
                    --metal-zeta0 1e-17 --metal-z-metal 1e-3 --metal-ff-ret 3.0
+
+# With gamma-dependent collapse factor (Higuchi+2018 Eq.5-7)
+bash run_collapse.sh --prim-zeta0 1e-17 --metal-zeta0 1e-17 --metal-z-metal 1e-3 \
+                   --common-ff-gamma
 
 # With cosmological redshift
 bash run_collapse.sh --prim-zeta0 1e-17 --prim-redshift 20 \
