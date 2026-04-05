@@ -14,8 +14,9 @@ Prim options
     --h5dir  DIR    Directory containing collapse_CR<tag>.h5
     --cr-tag TAG    CR tag (e.g. "1p5e-17", "0")
     --fret-tag TAG  free-fall retardation tag
-                      scalar PRIM_FF_RET  → e.g. "3p0"   → suffix _fret3p0
-                      table  PRIM_FRET_TABLE → use "step" → suffix _fret-step
+                      scalar PRIM_FF_RET    → e.g. "3p0"   → suffix _fret3p0
+                      table  PRIM_FRET_TABLE → use "step"  → suffix _fret-step
+                      gamma  PRIM_FF_GAMMA   → use "gamma" → suffix _fret-gamma
                       (omit or '' for f_ret=1, no suffix)
     --jlw-tag  TAG  Lyman-Werner tag (e.g. "1p5" → suffix _JLW1p5; omit for J_LW21=0)
     --zred-tag TAG  redshift tag (omit or '' for z=0)
@@ -210,13 +211,17 @@ def _h5_stem(h5dir: str, stem: str) -> str:
 def _fret_suffix(fret_tag: str) -> str:
     """Return the _fret<…> suffix for a given fret_tag.
 
-    Special case: "step" → "_fret-step"  (table mode; avoids passing "-step"
-    on the CLI since argparse treats leading-dash values as flags).
-    Otherwise:    "_fret<fret_tag>"  (e.g. "3p0" → "_fret3p0").
+    Named modes are passed without their leading dash (stripped in run_collapse.sh
+    to avoid argparse treating leading-dash values as flags):
+      "step"  → "_fret-step"   (PRIM/METAL_FRET_TABLE mode)
+      "gamma" → "_fret-gamma"  (PRIM/METAL_FF_GAMMA mode; Higuchi+2018 Eq.5-7)
+    Numeric tags are passed as-is:
+      "3p0"   → "_fret3p0"
     """
     if not fret_tag:
         return ""
-    return "_fret-step" if fret_tag == "step" else f"_fret{fret_tag}"
+    _NAMED = {"step", "gamma"}
+    return f"_fret-{fret_tag}" if fret_tag in _NAMED else f"_fret{fret_tag}"
 
 
 def _jlw_suffix(jlw_tag: str) -> str:

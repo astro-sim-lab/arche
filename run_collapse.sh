@@ -9,6 +9,7 @@
 #     --common-zeta0         VALUE   CR ionization rate [s^-1]
 #     --common-ff-ret        VALUE   scalar free-fall retardation factor (>0)
 #     --common-fret-table    FILE    2-col step-function table: nH[cm^-3] f_ret
+#     --common-ff-gamma              gamma-dependent collapse factor (Higuchi+2018 Eq.5-7)
 #     --common-jlw21         VALUE   Lyman-Werner intensity J_21 [10^-21 erg/s/cm^2/Hz/sr]
 #     --common-redshift      VALUE   cosmological redshift z (T_rad = 2.725 * (1+z) [K])
 #     --common-tk0           VALUE   initial gas temperature [K]
@@ -69,8 +70,10 @@ ENV_METAL_ZETA0="${METAL_ZETA0-}"
 ENV_METAL_Z_METAL="${METAL_Z_METAL-}"
 ENV_PRIM_FF_RET="${PRIM_FF_RET-}"
 ENV_PRIM_FRET_TABLE="${PRIM_FRET_TABLE-}"
+ENV_PRIM_FF_GAMMA="${PRIM_FF_GAMMA-}"
 ENV_METAL_FF_RET="${METAL_FF_RET-}"
 ENV_METAL_FRET_TABLE="${METAL_FRET_TABLE-}"
+ENV_METAL_FF_GAMMA="${METAL_FF_GAMMA-}"
 ENV_PRIM_JLW21="${PRIM_JLW21-}"
 ENV_METAL_JLW21="${METAL_JLW21-}"
 ENV_PRIM_REDSHIFT="${PRIM_REDSHIFT-}"
@@ -122,6 +125,7 @@ METAL_Z_METAL=""
 COMMON_ZETA0=""
 COMMON_FF_RET=""
 COMMON_FRET_TABLE=""
+COMMON_FF_GAMMA=""
 COMMON_JLW21=""
 COMMON_REDSHIFT=""
 COMMON_TK0=""
@@ -140,8 +144,10 @@ COMMON_CR_ATTEN_COL_DENS=""
 COMMON_DATA_DIR=""
 PRIM_FF_RET=""
 PRIM_FRET_TABLE=""
+PRIM_FF_GAMMA=""
 METAL_FF_RET=""
 METAL_FRET_TABLE=""
+METAL_FF_GAMMA=""
 PRIM_JLW21=""
 METAL_JLW21=""
 PRIM_REDSHIFT=""
@@ -202,6 +208,7 @@ while [[ $# -gt 0 ]]; do
         --common-zeta0)  COMMON_ZETA0="$2";  shift 2 ;;
         --common-ff-ret) COMMON_FF_RET="$2"; shift 2 ;;
         --common-fret-table) COMMON_FRET_TABLE="$2"; shift 2 ;;
+        --common-ff-gamma) COMMON_FF_GAMMA="1"; shift ;;
         --common-jlw21)  COMMON_JLW21="$2";  shift 2 ;;
         --common-redshift) COMMON_REDSHIFT="$2"; shift 2 ;;
         --common-tk0)    COMMON_TK0="$2";    shift 2 ;;
@@ -223,8 +230,10 @@ while [[ $# -gt 0 ]]; do
         --metal-z-metal) METAL_Z_METAL="$2"; shift 2 ;;
         --prim-ff-ret)      PRIM_FF_RET="$2";      shift 2 ;;
         --prim-fret-table)  PRIM_FRET_TABLE="$2";  shift 2 ;;
+        --prim-ff-gamma)    PRIM_FF_GAMMA="1";      shift ;;
         --metal-ff-ret)     METAL_FF_RET="$2";     shift 2 ;;
         --metal-fret-table) METAL_FRET_TABLE="$2"; shift 2 ;;
+        --metal-ff-gamma)   METAL_FF_GAMMA="1";     shift ;;
         --prim-jlw21)       PRIM_JLW21="$2";       shift 2 ;;
         --metal-jlw21)      METAL_JLW21="$2";      shift 2 ;;
         --prim-redshift)    PRIM_REDSHIFT="$2";    shift 2 ;;
@@ -302,6 +311,8 @@ mapfile -t _pair < <(apply_common_cli "$COMMON_FF_RET" "$PRIM_FF_RET" "$METAL_FF
 PRIM_FF_RET="${_pair[0]}"; METAL_FF_RET="${_pair[1]}"
 mapfile -t _pair < <(apply_common_cli "$COMMON_FRET_TABLE" "$PRIM_FRET_TABLE" "$METAL_FRET_TABLE")
 PRIM_FRET_TABLE="${_pair[0]}"; METAL_FRET_TABLE="${_pair[1]}"
+mapfile -t _pair < <(apply_common_cli "$COMMON_FF_GAMMA" "$PRIM_FF_GAMMA" "$METAL_FF_GAMMA")
+PRIM_FF_GAMMA="${_pair[0]}"; METAL_FF_GAMMA="${_pair[1]}"
 mapfile -t _pair < <(apply_common_cli "$COMMON_JLW21" "$PRIM_JLW21" "$METAL_JLW21")
 PRIM_JLW21="${_pair[0]}"; METAL_JLW21="${_pair[1]}"
 mapfile -t _pair < <(apply_common_cli "$COMMON_REDSHIFT" "$PRIM_REDSHIFT" "$METAL_REDSHIFT")
@@ -340,7 +351,7 @@ declare -A CFG
 
 is_allowed_config_key() {
     case "$1" in
-        PRIM_ZETA0|METAL_ZETA0|METAL_Z_METAL|PRIM_FF_RET|PRIM_FRET_TABLE|METAL_FF_RET|METAL_FRET_TABLE|PRIM_JLW21|METAL_JLW21|PRIM_REDSHIFT|METAL_REDSHIFT|PRIM_TK0|PRIM_YE0|PRIM_YH2|PRIM_YHD|PRIM_ABUNDANCE_SET|METAL_TK0|METAL_YE0|METAL_YH2|METAL_YHD|METAL_ABUNDANCE_SET|PRIM_XNH0|PRIM_OUTPUT_STRIDE|PRIM_MAX_ITER|PRIM_DT_FACTOR|PRIM_DT_FACTOR_INIT|PRIM_N_INIT_STEPS|PRIM_XNH_STOP|PRIM_CR_ATTEN_COL_DENS|PRIM_DATA_DIR|METAL_XNH0|METAL_OUTPUT_STRIDE|METAL_MAX_ITER|METAL_DT_FACTOR|METAL_DT_FACTOR_INIT|METAL_N_INIT_STEPS|METAL_XNH_STOP|METAL_CR_ATTEN_COL_DENS|METAL_CR_ATTEN_SECOND_FRAC|METAL_CR_METAL_BKGND|METAL_SRA_RATE|METAL_LRA_RATE|METAL_T_CR_DES|METAL_C_GAS_FRAC|METAL_O_GAS_FRAC|METAL_MG_GAS_FRAC|METAL_DATA_DIR|BUILD_DIR|OUT_DIR|SAVE_DIR|COMMON_ZETA0|COMMON_FF_RET|COMMON_FRET_TABLE|COMMON_JLW21|COMMON_REDSHIFT|COMMON_TK0|COMMON_YE0|COMMON_YH2|COMMON_YHD|COMMON_ABUNDANCE_SET|COMMON_XNH0|COMMON_OUTPUT_STRIDE|COMMON_MAX_ITER|COMMON_DT_FACTOR|COMMON_DT_FACTOR_INIT|COMMON_N_INIT_STEPS|COMMON_XNH_STOP|COMMON_CR_ATTEN_COL_DENS|COMMON_DATA_DIR)
+        PRIM_ZETA0|METAL_ZETA0|METAL_Z_METAL|PRIM_FF_RET|PRIM_FRET_TABLE|PRIM_FF_GAMMA|METAL_FF_RET|METAL_FRET_TABLE|METAL_FF_GAMMA|PRIM_JLW21|METAL_JLW21|PRIM_REDSHIFT|METAL_REDSHIFT|PRIM_TK0|PRIM_YE0|PRIM_YH2|PRIM_YHD|PRIM_ABUNDANCE_SET|METAL_TK0|METAL_YE0|METAL_YH2|METAL_YHD|METAL_ABUNDANCE_SET|PRIM_XNH0|PRIM_OUTPUT_STRIDE|PRIM_MAX_ITER|PRIM_DT_FACTOR|PRIM_DT_FACTOR_INIT|PRIM_N_INIT_STEPS|PRIM_XNH_STOP|PRIM_CR_ATTEN_COL_DENS|PRIM_DATA_DIR|METAL_XNH0|METAL_OUTPUT_STRIDE|METAL_MAX_ITER|METAL_DT_FACTOR|METAL_DT_FACTOR_INIT|METAL_N_INIT_STEPS|METAL_XNH_STOP|METAL_CR_ATTEN_COL_DENS|METAL_CR_ATTEN_SECOND_FRAC|METAL_CR_METAL_BKGND|METAL_SRA_RATE|METAL_LRA_RATE|METAL_T_CR_DES|METAL_C_GAS_FRAC|METAL_O_GAS_FRAC|METAL_MG_GAS_FRAC|METAL_DATA_DIR|BUILD_DIR|OUT_DIR|SAVE_DIR|COMMON_ZETA0|COMMON_FF_RET|COMMON_FRET_TABLE|COMMON_FF_GAMMA|COMMON_JLW21|COMMON_REDSHIFT|COMMON_TK0|COMMON_YE0|COMMON_YH2|COMMON_YHD|COMMON_ABUNDANCE_SET|COMMON_XNH0|COMMON_OUTPUT_STRIDE|COMMON_MAX_ITER|COMMON_DT_FACTOR|COMMON_DT_FACTOR_INIT|COMMON_N_INIT_STEPS|COMMON_XNH_STOP|COMMON_CR_ATTEN_COL_DENS|COMMON_DATA_DIR)
             return 0 ;;
         *)
             return 1 ;;
@@ -425,8 +436,10 @@ METAL_ZETA0="$(pick_value "$METAL_ZETA0" "$ENV_METAL_ZETA0" "$(cfg_or_common MET
 METAL_Z_METAL="$(pick_value "$METAL_Z_METAL" "$ENV_METAL_Z_METAL" "${CFG[METAL_Z_METAL]-}")"
 PRIM_FF_RET="$(pick_value "$PRIM_FF_RET" "$ENV_PRIM_FF_RET" "$(cfg_or_common PRIM_FF_RET COMMON_FF_RET)")"
 PRIM_FRET_TABLE="$(pick_value "$PRIM_FRET_TABLE" "$ENV_PRIM_FRET_TABLE" "$(cfg_or_common PRIM_FRET_TABLE COMMON_FRET_TABLE)")"
+PRIM_FF_GAMMA="$(pick_value "$PRIM_FF_GAMMA" "$ENV_PRIM_FF_GAMMA" "$(cfg_or_common PRIM_FF_GAMMA COMMON_FF_GAMMA)")"
 METAL_FF_RET="$(pick_value "$METAL_FF_RET" "$ENV_METAL_FF_RET" "$(cfg_or_common METAL_FF_RET COMMON_FF_RET)")"
 METAL_FRET_TABLE="$(pick_value "$METAL_FRET_TABLE" "$ENV_METAL_FRET_TABLE" "$(cfg_or_common METAL_FRET_TABLE COMMON_FRET_TABLE)")"
+METAL_FF_GAMMA="$(pick_value "$METAL_FF_GAMMA" "$ENV_METAL_FF_GAMMA" "$(cfg_or_common METAL_FF_GAMMA COMMON_FF_GAMMA)")"
 PRIM_JLW21="$(pick_value "$PRIM_JLW21" "$ENV_PRIM_JLW21" "$(cfg_or_common PRIM_JLW21 COMMON_JLW21)")"
 METAL_JLW21="$(pick_value "$METAL_JLW21" "$ENV_METAL_JLW21" "$(cfg_or_common METAL_JLW21 COMMON_JLW21)")"
 PRIM_REDSHIFT="$(pick_value "$PRIM_REDSHIFT" "$ENV_PRIM_REDSHIFT" "$(cfg_or_common PRIM_REDSHIFT COMMON_REDSHIFT)")"
@@ -472,8 +485,10 @@ OUT_DIR="$(pick_value "$OUT_DIR" "$ENV_OUT_DIR" "${CFG[OUT_DIR]-}")"
 SAVE_DIR="$(pick_value "$SAVE_DIR" "$ENV_SAVE_DIR" "${CFG[SAVE_DIR]-}")"
 
 [[ -z "$BUILD_DIR" ]] && BUILD_DIR="build"
-[[ -z "$OUT_DIR"   ]] && OUT_DIR="results/"
-[[ -z "$SAVE_DIR"  ]] && SAVE_DIR="results/"
+[[ -z "$OUT_DIR"   ]] && OUT_DIR="results"
+[[ -z "$SAVE_DIR"  ]] && SAVE_DIR="results"
+OUT_DIR="${OUT_DIR%/}"
+SAVE_DIR="${SAVE_DIR%/}"
 
 cd "$SCRIPT_DIR"
 
@@ -521,7 +536,12 @@ if [[ $DO_PRIM -eq 1 ]]; then
         echo "ERROR: --prim-zeta0 is required (use --no-prim to skip)" >&2; exit 1
     fi
     validate_nonneg "--prim-zeta0" "$PRIM_ZETA0"
-    if [[ -n "$PRIM_FRET_TABLE" ]]; then
+    if [[ -n "$PRIM_FF_GAMMA" ]]; then
+        [[ -n "$PRIM_FRET_TABLE" ]] && \
+            echo "WARNING: --prim-ff-gamma is set; --prim-fret-table will be ignored" >&2
+        [[ -n "$PRIM_FF_RET" ]] && \
+            echo "WARNING: --prim-ff-gamma is set; --prim-ff-ret will be ignored" >&2
+    elif [[ -n "$PRIM_FRET_TABLE" ]]; then
         [[ -f "$PRIM_FRET_TABLE" ]] || {
             echo "ERROR: --prim-fret-table file not found: $PRIM_FRET_TABLE" >&2; exit 1
         }
@@ -553,7 +573,12 @@ if [[ $DO_METAL -eq 1 ]]; then
     fi
     validate_nonneg "--metal-zeta0"   "$METAL_ZETA0"
     validate_nonneg "--metal-z-metal" "$METAL_Z_METAL"
-    if [[ -n "$METAL_FRET_TABLE" ]]; then
+    if [[ -n "$METAL_FF_GAMMA" ]]; then
+        [[ -n "$METAL_FRET_TABLE" ]] && \
+            echo "WARNING: --metal-ff-gamma is set; --metal-fret-table will be ignored" >&2
+        [[ -n "$METAL_FF_RET" ]] && \
+            echo "WARNING: --metal-ff-gamma is set; --metal-ff-ret will be ignored" >&2
+    elif [[ -n "$METAL_FRET_TABLE" ]]; then
         [[ -f "$METAL_FRET_TABLE" ]] || {
             echo "ERROR: --metal-fret-table file not found: $METAL_FRET_TABLE" >&2; exit 1
         }
@@ -616,7 +641,9 @@ else
 fi
 if [[ $DO_PRIM -eq 1 ]]; then
     echo "  primordial : zeta0=${PRIM_ZETA0} s^-1"
-    if [[ -n "$PRIM_FRET_TABLE" ]]; then
+    if [[ -n "$PRIM_FF_GAMMA" ]]; then
+        echo "               f_ret=gamma (Higuchi+2018 Eq.5-7)"
+    elif [[ -n "$PRIM_FRET_TABLE" ]]; then
         echo "               f_ret=step-table (${PRIM_FRET_TABLE})"
     elif [[ -n "$PRIM_FF_RET" ]]; then
         echo "               f_ret=${PRIM_FF_RET}"
@@ -637,7 +664,9 @@ fi
 if [[ $DO_METAL -eq 1 ]]; then
     echo "  metal_grain: zeta0=${METAL_ZETA0} s^-1"
     echo "               Z_metal=${METAL_Z_METAL} Z☉"
-    if [[ -n "$METAL_FRET_TABLE" ]]; then
+    if [[ -n "$METAL_FF_GAMMA" ]]; then
+        echo "               f_ret=gamma (Higuchi+2018 Eq.5-7)"
+    elif [[ -n "$METAL_FRET_TABLE" ]]; then
         echo "               f_ret=step-table (${METAL_FRET_TABLE})"
     elif [[ -n "$METAL_FF_RET" ]]; then
         echo "               f_ret=${METAL_FF_RET}"
@@ -686,7 +715,7 @@ if [[ $DO_PRIM -eq 1 ]]; then
     echo ">>> [2/5] primordial_collapse  zeta0=${PRIM_ZETA0} s^-1"
     mkdir -p "$PRIM_OUT"
     PRIM_OUTDIR="$PRIM_OUT" PRIM_ZETA0="$PRIM_ZETA0" \
-        PRIM_FF_RET="$PRIM_FF_RET" PRIM_FRET_TABLE="$PRIM_FRET_TABLE" \
+        PRIM_FF_RET="$PRIM_FF_RET" PRIM_FRET_TABLE="$PRIM_FRET_TABLE" PRIM_FF_GAMMA="$PRIM_FF_GAMMA" \
         PRIM_JLW21="$PRIM_JLW21" \
         PRIM_REDSHIFT="$PRIM_REDSHIFT" \
         PRIM_ABUNDANCE_SET="$PRIM_ABUNDANCE_SET" \
@@ -699,8 +728,10 @@ if [[ $DO_PRIM -eq 1 ]]; then
         PRIM_MAX_ITER="$PRIM_MAX_ITER" PRIM_DATA_DIR="$PRIM_DATA_DIR" \
         "${BUILD_DIR}/src/apps/collapse_primordial/prim_collapse"
     PRIM_TAG=$(make_tag "$PRIM_ZETA0")
-    # fret tag: table mode → fixed "-step"; scalar → numeric tag (only when != 1.0)
-    if [[ -n "$PRIM_FRET_TABLE" ]]; then
+    # fret tag: gamma mode → "-gamma"; table mode → "-step"; scalar → numeric (only when != 1.0)
+    if [[ -n "$PRIM_FF_GAMMA" ]]; then
+        PRIM_FRET_TAG="-gamma"
+    elif [[ -n "$PRIM_FRET_TABLE" ]]; then
         PRIM_FRET_TAG="-step"
     elif [[ -n "$PRIM_FF_RET" ]]; then
         # append fret tag only when f_ret != 1.0
@@ -738,7 +769,7 @@ if [[ $DO_METAL -eq 1 ]]; then
     echo ">>> [3/5] metal_grain_collapse  zeta0=${METAL_ZETA0} s^-1  Z_metal=${METAL_Z_METAL} Z☉"
     mkdir -p "$METAL_OUT"
     METAL_OUTDIR="$METAL_OUT" METAL_ZETA0="$METAL_ZETA0" METAL_Z_METAL="$METAL_Z_METAL" \
-        METAL_FF_RET="$METAL_FF_RET" METAL_FRET_TABLE="$METAL_FRET_TABLE" \
+        METAL_FF_RET="$METAL_FF_RET" METAL_FRET_TABLE="$METAL_FRET_TABLE" METAL_FF_GAMMA="$METAL_FF_GAMMA" \
         METAL_JLW21="$METAL_JLW21" \
         METAL_REDSHIFT="$METAL_REDSHIFT" \
         METAL_ABUNDANCE_SET="$METAL_ABUNDANCE_SET" \
@@ -760,8 +791,10 @@ if [[ $DO_METAL -eq 1 ]]; then
         "${BUILD_DIR}/src/apps/collapse_metal_grain/metal_collapse"
     METAL_CR_TAG=$(make_tag "$METAL_ZETA0")
     METAL_Z_TAG=$(make_tag "$METAL_Z_METAL")
-    # fret tag: table mode → fixed "-step"; scalar → numeric tag (only when != 1.0)
-    if [[ -n "$METAL_FRET_TABLE" ]]; then
+    # fret tag: gamma mode → "-gamma"; table mode → "-step"; scalar → numeric (only when != 1.0)
+    if [[ -n "$METAL_FF_GAMMA" ]]; then
+        METAL_FRET_TAG="-gamma"
+    elif [[ -n "$METAL_FRET_TABLE" ]]; then
         METAL_FRET_TAG="-step"
     elif [[ -n "$METAL_FF_RET" ]]; then
         # append fret tag only when f_ret != 1.0
@@ -787,6 +820,15 @@ else
     echo ">>> [3/5] metal_grain_collapse skipped"
 fi
 
+# Convert internal fret tag (-step, -gamma, or numeric) to CLI form.
+# Strips a leading dash to avoid argparse treating it as a flag option.
+# "-step" → "step",  "-gamma" → "gamma",  "3p0" → "3p0"
+_resample_fret_arg() {
+    local t="$1"
+    [[ "${t:0:1}" == "-" ]] && t="${t:1}"
+    echo "$t"
+}
+
 # ── [4] Visualisation ────────────────────────────────────────────────────────
 if [[ $DO_PLOT -eq 1 ]]; then
     echo ""
@@ -798,7 +840,7 @@ if [[ $DO_PLOT -eq 1 ]]; then
     PLOT_ARGS=()
     if [[ $DO_PRIM -eq 1 ]]; then
         PLOT_ARGS+=(--h5dir "$PRIM_OUT" --cr-tag "$PRIM_TAG" --save "$PRIM_SAVE")
-        [[ -n "$PRIM_FRET_TAG"  ]] && PLOT_ARGS+=(--fret-tag "$PRIM_FRET_TAG")
+        [[ -n "$PRIM_FRET_TAG"  ]] && PLOT_ARGS+=(--fret-tag="$PRIM_FRET_TAG")
         [[ -n "$PRIM_JLW_TAG"   ]] && PLOT_ARGS+=(--jlw-tag  "$PRIM_JLW_TAG")
         [[ -n "$PRIM_ZRED_TAG"  ]] && PLOT_ARGS+=(--zred-tag "$PRIM_ZRED_TAG")
     fi
@@ -807,7 +849,7 @@ if [[ $DO_PLOT -eq 1 ]]; then
                     --metal-cr "$METAL_CR_TAG"
                     --metal-z  "$METAL_Z_TAG"
                     --metal-save "$METAL_SAVE")
-        [[ -n "$METAL_FRET_TAG" ]] && PLOT_ARGS+=(--metal-fret "$METAL_FRET_TAG")
+        [[ -n "$METAL_FRET_TAG" ]] && PLOT_ARGS+=(--metal-fret="$METAL_FRET_TAG")
         [[ -n "$METAL_JLW_TAG"  ]] && PLOT_ARGS+=(--metal-jlw  "$METAL_JLW_TAG")
         [[ -n "$METAL_ZRED_TAG" ]] && PLOT_ARGS+=(--metal-zred "$METAL_ZRED_TAG")
     fi
@@ -824,13 +866,6 @@ else
 fi
 
 # ── [5] Resample ─────────────────────────────────────────────────────────────
-# Convert internal fret tag (-step or numeric) to resample_collapse.py CLI form.
-# "-step" → "step"  (avoids argparse leading-dash problem)
-# "3p0"   → "3p0"   (unchanged)
-_resample_fret_arg() {
-    if [[ "$1" == "-step" ]]; then echo "step"; else echo "$1"; fi
-}
-
 if [[ $DO_RESAMPLE -eq 1 ]]; then
     if [[ $DO_PRIM -eq 0 && $DO_METAL -eq 0 ]]; then
         echo ">>> [5/5] Resample skipped (both --no-prim and --no-metal)"

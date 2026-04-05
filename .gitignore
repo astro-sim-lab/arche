@@ -13,6 +13,7 @@ build/
 
 # Runtime outputs
 results/
+.dev/reference/fortran/metal_grain/test/
 
 # Python artifacts
 __pycache__/
