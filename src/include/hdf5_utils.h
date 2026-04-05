@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Shingo Hirano and Sho Higashi
+// Licensed under the MIT found in the
+// https://github.com/astro-sim-lab/arche/blob/main/LICENSE
 // hdf5_utils.h — thin inline wrappers around the HDF5 C API
 //
 // Shared by primordial_collapse and metal_grain_collapse.
