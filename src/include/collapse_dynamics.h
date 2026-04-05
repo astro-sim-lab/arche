@@ -1,12 +1,16 @@
-// collapse_dynamics.h — shared helpers for one-zone collapse dynamics
+// Copyright (C) 2026 Shingo Hirano and Sho Higashi
+// Licensed under the MIT found in the
+// https://github.com/astro-sim-lab/arche/blob/main/LICENSE
+#pragma once
+// collapse_dynamics.h  Eshared helpers for one-zone collapse dynamics
 //
 // Provides the gamma-dependent free-fall correction factor from:
-//   Higuchi, Machida & Susa (2018) MNRAS 475, 3331 — equations (5)-(7)
+//   Higuchi, Machida & Susa (2018) MNRAS 475, 3331  Eequations (5)-(7)
 //   (original formulation: Omukai et al. 2005)
 
-#pragma once
 #include <cmath>
 #include <algorithm>
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // fgamma_collapse — pressure-gradient correction factor f(γ)
