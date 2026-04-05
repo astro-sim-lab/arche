@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Shingo Hirano and Sho Higashi
+// Licensed under the MIT found in the
+// https://github.com/astro-sim-lab/arche/blob/main/LICENSE
 #pragma once
 // ---------------------------------------------------------------------------
 // cooling_grain.h — grain + gas continuum cooling for the metal_grain network
