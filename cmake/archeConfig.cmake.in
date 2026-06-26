@@ -1,0 +1,14 @@
+@PACKAGE_INIT@
+
+# arche links Eigen3 as a PUBLIC usage requirement via the imported target
+# Eigen3::Eigen, which must be re-established here. The HDF5 C library is baked
+# into the exported target as absolute paths, so it needs no re-discovery (and we
+# deliberately avoid find_dependency(HDF5 COMPONENTS C), which would force every
+# consumer — including pure C++ ones — to enable the C language for HDF5's
+# compiler test). The facade headers themselves pull in neither Eigen nor HDF5.
+include(CMakeFindDependencyMacro)
+find_dependency(Eigen3)
+
+include("${CMAKE_CURRENT_LIST_DIR}/archeTargets.cmake")
+
+check_required_components(arche)
