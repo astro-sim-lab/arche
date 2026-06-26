@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026 Shingo Hirano and Sho Higashi
+# Licensed under the MIT found in the
+# https://github.com/astro-sim-lab/arche/blob/main/LICENSE
 """
 analyze_collapse.py — single-case analysis and visualization (HDF5 input)
 
@@ -69,6 +72,30 @@ YR    = 3.156e7    # s
 # I/O helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Output-schema compatibility (N-B). schema_version >= 2 uses the renamed
+# dataset names (nH / Lambda_* / Gamma_* / M_J / lambda_J); legacy v1 files use
+# the x-prefixed names. This map lets the tool read either: v1 keys are aliased
+# to their v2 names on load, so the rest of the tool uses v2 names uniformly.
+LEGACY_TO_V2 = {
+    "xnH": "nH",
+    "xLmbd_net": "Lambda_net", "xLmbd_line": "Lambda_line",
+    "xLmbd_cnt": "Lambda_cnt", "xLmbd_ch": "Lambda_chem",
+    "xLmbd_gas": "Lambda_gas", "xLmbd_gr": "Lambda_gr",
+    "xLmbd_Lya": "Lambda_Lya", "xLmbd_H2": "Lambda_H2", "xLmbd_HD": "Lambda_HD",
+    "xLmbd_CO": "Lambda_CO", "xLmbd_OH": "Lambda_OH", "xLmbd_H2O": "Lambda_H2O",
+    "xLmbd_CII": "Lambda_CII", "xLmbd_CI": "Lambda_CI", "xLmbd_OI": "Lambda_OI",
+    "xGam_CR": "Gamma_CR", "xGam_cmp": "Gamma_cmp",
+    "xMJ": "M_J", "xlmbd_J": "lambda_J",
+}
+
+
+def _alias_legacy_schema(d: dict) -> None:
+    """In-place: alias any legacy v1 dataset keys to their v2 names."""
+    for old, new in LEGACY_TO_V2.items():
+        if old in d and new not in d:
+            d[new] = d[old]
+
+
 def load_case(h5path: str) -> dict:
     """Load one HDF5 file into a dict of numpy arrays + scalar attributes."""
     with h5py.File(h5path, "r") as f:
@@ -86,6 +113,7 @@ def load_case(h5path: str) -> dict:
             if isinstance(sp_raw, bytes):
                 sp_raw = sp_raw.decode()
             d["species"] = [s.strip() for s in sp_raw.split(",")]
+    _alias_legacy_schema(d)
     return d
 
 
@@ -157,29 +185,29 @@ def _metal_label(d: dict) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 _PRIM_COOL = [
-    ("xLmbd_H2",  "H2 line",   "#1f77b4", "-"),
-    ("xLmbd_HD",  "HD line",   "#2ca02c", "--"),
-    ("xLmbd_Lya", "Ly-alpha",  "#9467bd", "-."),
-    ("xLmbd_cnt", "continuum", "#7f7f7f", "-"),
-    ("xLmbd_ch",  "chemical",  "#e377c2", (0, (3, 1, 1, 1))),
-    ("xGam_CR",   "CR heat",   "#d62728", "-"),
-    ("xLmbd_net", "net",       "k",       "-"),
+    ("Lambda_H2",  "H2 line",   "#1f77b4", "-"),
+    ("Lambda_HD",  "HD line",   "#2ca02c", "--"),
+    ("Lambda_Lya", "Ly-alpha",  "#9467bd", "-."),
+    ("Lambda_cnt", "continuum", "#7f7f7f", "-"),
+    ("Lambda_chem",  "chemical",  "#e377c2", (0, (3, 1, 1, 1))),
+    ("Gamma_CR",   "CR heat",   "#d62728", "-"),
+    ("Lambda_net", "net",       "k",       "-"),
 ]
 
 _METAL_COOL = [
-    ("xLmbd_H2",  "H2",             "#1f77b4", "-"),
-    ("xLmbd_HD",  "HD",             "#2ca02c", "--"),
-    ("xLmbd_CO",  "CO",             "#d62728", "-."),
-    ("xLmbd_OH",  "OH",             "#9467bd", ":"),
-    ("xLmbd_H2O", "H2O",            "#8c564b", (0, (5, 1))),
-    ("xLmbd_CII", "C II",           "#e377c2", (0, (3, 1, 1, 1))),
-    ("xLmbd_CI",  "C I",            "#17becf", (0, (3, 1))),
-    ("xLmbd_OI",  "O I",            "#bcbd22", (0, (1, 1))),
-    ("xLmbd_cnt", "cnt (total)",    "#7f7f7f", "-"),
-    ("xLmbd_gr",  "cnt (grain)",    "#a0a000", "--"),
-    ("xLmbd_gas", "cnt (gas)",      "#b0b0b0", ":"),
-    ("xGam_CR",   "CR heat",        "#ff7f0e", "-"),
-    ("xLmbd_net", "net",            "k",       "-"),
+    ("Lambda_H2",  "H2",             "#1f77b4", "-"),
+    ("Lambda_HD",  "HD",             "#2ca02c", "--"),
+    ("Lambda_CO",  "CO",             "#d62728", "-."),
+    ("Lambda_OH",  "OH",             "#9467bd", ":"),
+    ("Lambda_H2O", "H2O",            "#8c564b", (0, (5, 1))),
+    ("Lambda_CII", "C II",           "#e377c2", (0, (3, 1, 1, 1))),
+    ("Lambda_CI",  "C I",            "#17becf", (0, (3, 1))),
+    ("Lambda_OI",  "O I",            "#bcbd22", (0, (1, 1))),
+    ("Lambda_cnt", "cnt (total)",    "#7f7f7f", "-"),
+    ("Lambda_gr",  "cnt (grain)",    "#a0a000", "--"),
+    ("Lambda_gas", "cnt (gas)",      "#b0b0b0", ":"),
+    ("Gamma_CR",   "CR heat",        "#ff7f0e", "-"),
+    ("Lambda_net", "net",            "k",       "-"),
 ]
 
 # Species color mapping for metal summary (aligned with _METAL_COOL where possible)
@@ -202,9 +230,9 @@ _METAL_SP_COLOR = {
 
 def _draw_phase(ax, d: dict, is_metal: bool):
     """Draw nH–T phase diagram into *ax*.  Curve labels are descriptive only."""
-    ax.plot(d["xnH"], d["T_K"], lw=1.6, label="gas $T$")
+    ax.plot(d["nH"], d["T_K"], lw=1.6, label="gas $T$")
     if is_metal and "T_gr_K" in d:
-        ax.plot(d["xnH"], d["T_gr_K"], lw=1.2, ls="--",
+        ax.plot(d["nH"], d["T_gr_K"], lw=1.2, ls="--",
                 color="tab:orange", label="grain $T$")
     ax.set_xscale("log"); ax.set_yscale("log")
     ax.set_ylabel(r"$T$  [K]", fontsize=11)
@@ -217,14 +245,14 @@ def _draw_phase(ax, d: dict, is_metal: bool):
 def _draw_cooling(ax, d: dict, is_metal: bool):
     """Draw cooling/heating rate curves into *ax*."""
     components = _METAL_COOL if is_metal else _PRIM_COOL
-    nH = d["xnH"]
+    nH = d["nH"]
     for key, label, color, ls in components:
         if key not in d:
             continue
         vals = d[key]
         pos = np.where(vals > 0, vals, np.nan)
         neg = np.where(vals < 0, -vals, np.nan)
-        lw = 1.5 if key in ("xLmbd_cnt", "xLmbd_net") else 1.2
+        lw = 1.5 if key in ("Lambda_cnt", "Lambda_net") else 1.2
         ax.plot(nH, pos, color=color, ls=ls, lw=lw, label=f"{label} (+)")
         if np.any(np.isfinite(neg)):
             ax.plot(nH, neg, color=color, ls="--", lw=0.7, alpha=0.5,
@@ -293,7 +321,7 @@ def prim_species(d: dict, tag_sfx: str, save_dir: str):
     for ax, (sp, ylabel) in zip(axes, spec_list):
         idx = get_species_idx(d, sp)
         if idx is not None:
-            ax.plot(d["xnH"], d["y"][:, idx], lw=1.4)
+            ax.plot(d["nH"], d["y"][:, idx], lw=1.4)
         ax.set_xscale("log"); ax.set_yscale("log")
         ax.set_ylabel(ylabel, fontsize=11)
         ax.grid(True, which="both", alpha=0.3)
@@ -326,7 +354,7 @@ def metal_species(d: dict, tag_sfx: str, save_dir: str):
     for ax, (sp, ylabel) in zip(axes, _METAL_SPECIES):
         idx = get_species_idx(d, sp)
         if idx is not None:
-            ax.plot(d["xnH"], d["y"][:, idx], lw=1.3)
+            ax.plot(d["nH"], d["y"][:, idx], lw=1.3)
         ax.set_xscale("log"); ax.set_yscale("log")
         ax.set_ylabel(ylabel, fontsize=11)
         ax.grid(True, which="both", alpha=0.3)
@@ -348,8 +376,8 @@ def metal_species(d: dict, tag_sfx: str, save_dir: str):
 def _plot_jeans(d: dict, label: str, tag_sfx: str, save_dir: str):
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(7, 11), sharex=True,
                                          gridspec_kw={"hspace": 0.05})
-    nH  = d["xnH"]
-    MJ  = d["xMJ"]  / M_SUN
+    nH  = d["nH"]
+    MJ  = d["M_J"]  / M_SUN
     tff = d["t_ff"] / YR
 
     # γ_eff = d(ln P)/d(ln ρ) ≈ 1 + d(ln T)/d(ln ρ)
@@ -415,9 +443,9 @@ def _plot_thermal_balance(d: dict, label: str, tag_sfx: str, save_dir: str):
     fig, axes = plt.subplots(3, 1, figsize=(7, 10), sharex=True,
                              gridspec_kw={"hspace": 0.05})
     ax_net, ax_cr, ax_ratio = axes
-    nH    = d["xnH"]
-    Lnet  = d["xLmbd_net"]
-    GCR   = d["xGam_CR"]
+    nH    = d["nH"]
+    Lnet  = d["Lambda_net"]
+    GCR   = d["Gamma_CR"]
     tcool = d["t_cool"]
     tff   = d["t_ff"]
 
@@ -429,8 +457,8 @@ def _plot_thermal_balance(d: dict, label: str, tag_sfx: str, save_dir: str):
 
     # grain / gas continuum breakdown (metal only — data-driven)
     for key, lbl, color, ls in [
-        ("xLmbd_gr",  r"$\Lambda_\mathrm{gr}$",  "#a0a000", "--"),
-        ("xLmbd_gas", r"$\Lambda_\mathrm{gas}$", "#888888", ":"),
+        ("Lambda_gr",  r"$\Lambda_\mathrm{gr}$",  "#a0a000", "--"),
+        ("Lambda_gas", r"$\Lambda_\mathrm{gas}$", "#888888", ":"),
     ]:
         if key in d:
             vals = d[key]
@@ -515,7 +543,7 @@ def _plot_summary(d: dict, tag_sfx: str, save_dir: str, is_metal: bool):
             idx = get_species_idx(d, sp)
             if idx is not None:
                 color = _METAL_SP_COLOR.get(sp)
-                ax_sp.plot(d["xnH"], d["y"][:, idx],
+                ax_sp.plot(d["nH"], d["y"][:, idx],
                            lw=1.3, color=color, label=sp)
         ax_sp.legend(fontsize=8, ncol=3)
     else:
@@ -523,7 +551,7 @@ def _plot_summary(d: dict, tag_sfx: str, save_dir: str, is_metal: bool):
                         ("e-", r"$e^-$"), ("HD", r"HD")]:
             idx = get_species_idx(d, sp)
             if idx is not None:
-                ax_sp.plot(d["xnH"], d["y"][:, idx], lw=1.4, label=lbl)
+                ax_sp.plot(d["nH"], d["y"][:, idx], lw=1.4, label=lbl)
         ax_sp.legend(fontsize=9, ncol=2)
 
     ax_sp.set_xscale("log"); ax_sp.set_yscale("log")
@@ -534,9 +562,9 @@ def _plot_summary(d: dict, tag_sfx: str, save_dir: str, is_metal: bool):
     ax_sp.grid(True, which="both", alpha=0.3)
 
     # ── bottom-right: t_cool/t_ff + t_chem/t_ff (left) + M_J (right, twin) ───
-    nH  = d["xnH"]
+    nH  = d["nH"]
     tff = d["t_ff"]
-    MJ  = d["xMJ"] / M_SUN
+    MJ  = d["M_J"] / M_SUN
     tff_safe   = np.maximum(tff, 1.0)
     ratio_cool = np.minimum(d["t_cool"]  / tff_safe, 1e10)
     ratio_chem = np.minimum(d["t_chem"]  / tff_safe, 1e10)
@@ -659,7 +687,7 @@ def main():
         print(f"  zeta0={zeta0:.3e} s^-1  f_ret={f_ret}"
               + (f"  J_LW21={jlw21:.3g}" if jlw21 > 0.0 else "")
               + (f"  z={zred_tag}" if zred_tag else "")
-              + f"  ({len(d['xnH'])} rows)")
+              + f"  ({len(d['nH'])} rows)")
         prim_sfx = (f"CR{cr_tag}"
                     + (f"_fret{fret_tag}" if fret_tag else "")
                     + (f"_JLW{jlw_tag}"   if jlw_tag  else "")
@@ -700,7 +728,7 @@ def main():
         print(f"  zeta0={zeta0:.3e} s^-1  Z_metal={Z_metal:.3e}  f_ret={f_ret}"
               + (f"  J_LW21={jlw21:.3g}" if jlw21 > 0.0 else "")
               + (f"  z={zred_tag}" if zred_tag else "")
-              + f"  ({len(d['xnH'])} rows)")
+              + f"  ({len(d['nH'])} rows)")
         metal_sfx = (f"CR{cr_tag}_Z{z_tag}"
                      + (f"_fret{fret_tag}" if fret_tag else "")
                      + (f"_JLW{jlw_tag}"   if jlw_tag  else "")

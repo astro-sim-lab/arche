@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026 Shingo Hirano and Sho Higashi
+# Licensed under the MIT found in the
+# https://github.com/astro-sim-lab/arche/blob/main/LICENSE
 """
 resample_collapse.py — HDF5 collapse output → uniform log10(nH) bin CSV table
 
@@ -84,9 +87,9 @@ def lin_avg(arr: np.ndarray) -> float:
 # Keys: exact column names as they appear in the output CSV header.
 # Fallback (not in dict) → log_avg.
 AVG_FUNCS: Dict[str, Callable[[np.ndarray], float]] = {
-    "xLmbd_net": lin_avg,
+    "Lambda_net": lin_avg,
     # Add overrides here, e.g.:
-    #   "xGam_cmp": lin_avg,
+    #   "Gamma_cmp": lin_avg,
 }
 
 
@@ -98,6 +101,22 @@ def _avg(col_name: str, arr: np.ndarray) -> float:
 # ─────────────────────────────────────────────────────────────────────────────
 # HDF5 loading
 # ─────────────────────────────────────────────────────────────────────────────
+
+# Output-schema compatibility (N-B). v2 files use renamed dataset names
+# (nH / Lambda_* / Gamma_* / M_J / lambda_J); legacy v1 files use x-prefixed
+# names. Alias v1 keys to v2 on load so the rest of the tool uses v2 names.
+LEGACY_TO_V2 = {
+    "xnH": "nH",
+    "xLmbd_net": "Lambda_net", "xLmbd_line": "Lambda_line",
+    "xLmbd_cnt": "Lambda_cnt", "xLmbd_ch": "Lambda_chem",
+    "xLmbd_gas": "Lambda_gas", "xLmbd_gr": "Lambda_gr",
+    "xLmbd_Lya": "Lambda_Lya", "xLmbd_H2": "Lambda_H2", "xLmbd_HD": "Lambda_HD",
+    "xLmbd_CO": "Lambda_CO", "xLmbd_OH": "Lambda_OH", "xLmbd_H2O": "Lambda_H2O",
+    "xLmbd_CII": "Lambda_CII", "xLmbd_CI": "Lambda_CI", "xLmbd_OI": "Lambda_OI",
+    "xGam_CR": "Gamma_CR", "xGam_cmp": "Gamma_cmp",
+    "xMJ": "M_J", "xlmbd_J": "lambda_J",
+}
+
 
 def load_h5(path: str) -> dict:
     """Load one HDF5 file into a dict.  Arrays are numpy; attrs are scalars/str."""
@@ -122,6 +141,9 @@ def load_h5(path: str) -> dict:
             if isinstance(sp_raw, bytes):
                 sp_raw = sp_raw.decode()
             d["species"] = [s.strip() for s in sp_raw.split(",")]
+    for old, new in LEGACY_TO_V2.items():
+        if old in d and new not in d:
+            d[new] = d[old]
     return d
 
 
@@ -160,7 +182,7 @@ def resample(data: dict,
     edges, centers = make_grid(log_min, log_max, step)
     N_bins = len(centers)
 
-    log_nH_data = np.log10(data["xnH"])
+    log_nH_data = np.log10(data["nH"])
     # Assign each data point to a bin
     bin_idx = np.digitize(log_nH_data, edges) - 1   # 0-based; -1 = below, N = above
 
@@ -169,7 +191,7 @@ def resample(data: dict,
     scalar_cols = ["T_K"]
     if has_grain:
         scalar_cols.append("T_gr_K")
-    scalar_cols.append("xLmbd_net")
+    scalar_cols.append("Lambda_net")
 
     species_list = data.get("species", [])
     N_sp = data["y"].shape[1] if "y" in data else 0
