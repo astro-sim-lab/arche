@@ -53,10 +53,12 @@ COLORS = plt.cm.viridis(np.linspace(0.95, 0.05, len(Z_VALUES)))
 
 def load_h5(path):
     with h5py.File(path, "r") as f:
-        xnH = f["xnH"][:]
+        # Output schema v2 renamed "xnH" -> "nH"; fall back to the legacy v1
+        # name so this example works on both new and old .h5 files.
+        nH  = f["nH"][:] if "nH" in f else f["xnH"][:]
         T_K = f["T_K"][:]
         y   = f["y"][:]   # (N, 89)
-    return xnH, T_K, y
+    return nH, T_K, y
 
 
 def main():
@@ -80,13 +82,13 @@ def main():
             print(f"  [skip] not found: {fname}")
             continue
 
-        xnH, T_K, y = load_h5(fname)
+        nH, T_K, y = load_h5(fname)
 
-        ax_T.plot(  xnH, T_K,             color=color, lw=1.2, label=z_label)
-        ax_e.plot(  xnH, y[:, SP["e-"]], color=color, lw=1.2)
-        ax_mol.plot(xnH, y[:, SP["H2"]], color=color, lw=1.2, ls="-")
-        ax_mol.plot(xnH, y[:, SP["HD"]], color=color, lw=1.2, ls="--")
-        ax_Gr.plot( xnH, y[:, SP["Gr"]], color=color, lw=1.2)
+        ax_T.plot(  nH, T_K,             color=color, lw=1.2, label=z_label)
+        ax_e.plot(  nH, y[:, SP["e-"]], color=color, lw=1.2)
+        ax_mol.plot(nH, y[:, SP["H2"]], color=color, lw=1.2, ls="-")
+        ax_mol.plot(nH, y[:, SP["HD"]], color=color, lw=1.2, ls="--")
+        ax_Gr.plot( nH, y[:, SP["Gr"]], color=color, lw=1.2)
 
     # ── Axes formatting ──────────────────────────────────────────────────────
     ax_T.set_ylabel(r"$T\,[\mathrm{K}]$")
