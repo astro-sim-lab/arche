@@ -9,7 +9,13 @@ One-zone gravitational collapse and standalone chemistry integration for
 
 This repository provides collapse applications (`prim_collapse`, `metal_collapse`),
 standalone chemistry demos (`prim_chem`, `metal_chem`), and a unified wrapper
-(`run_collapse.sh`) for build → simulate → plot → resample workflows.
+(`run_collapse.sh`) for build → simulate → plot → resample workflows. Both
+sides also ship compact **minimal** networks for lighter-weight runs:
+`Nakauchi2019_Minimal` (15 species), selectable with `--minimal`, and
+`Nakauchi2021_Minimal` (40 species), selectable with `--metal-minimal`. The
+chemistry network is additionally packaged as an embeddable C/C++ library
+(`libarche`) for coupling to an external hydro code — see
+[`integration/`](integration/README.md).
 
 Release version: see [`VERSION`](VERSION).
 
@@ -18,9 +24,36 @@ For setup and full usage details, see:
 - `docs/parameters.md`
 - `docs/api_reference.md`
 - `docs/output_schema.md`
+- `integration/README.md` (using ARCHE as a library)
 
 Official companion tool:
 - [ResiTable](https://github.com/astro-sim-lab/resitable)
+
+---
+
+## Physics Coverage
+
+### Density and temperature (default)
+
+| Mode    | n<sub>H,init</sub> [cm⁻³] | n<sub>H,stop</sub> [cm⁻³] | T<sub>max</sub> [K] |
+|---------|:--------------------------:|:--------------------------:|:-------------------:|
+| prim    | 0.1                        | 10²³                       | 10⁵                 |
+| metal   | 0.1                        | 10²³                       | 10⁵                 |
+
+n<sub>H,stop</sub> is the default density ceiling (`PRIM_XNH_STOP` / `METAL_XNH_STOP`); the run may terminate earlier if T exceeds T<sub>max</sub>.
+
+### Input parameters
+
+| Parameter      | Symbol                  | prim | metal | default / range                   |
+|----------------|-------------------------|:----:|:-----:|-----------------------------------|
+| Metallicity    | Z                       | —    | ✓     | 0 Z☉                             |
+| CR ion. rate   | ζ<sub>CR</sub>          | ✓    | ✓     | 0 s⁻¹                            |
+| Lyman–Werner   | J<sub>LW</sub>          | ✓    | ✓     | 0 J₂₁                            |
+| X-ray †        | ζ<sub>X</sub>, E<sub>X</sub> | ✓ | ✓  | ζ<sub>X</sub> ≳ 10⁻²² s⁻¹; E<sub>X</sub> = 300 eV (default) |
+| Redshift       | z                       | ✓    | ✓     | ≧0 (sets T<sub>CMB</sub>)   |
+| ff-retardation | f<sub>ret</sub>         | ✓    | ✓     | 1                            |
+
+† Controlled by `ARCHE_XRAY` CMake option (default: **OFF**; experimental). Enable with `-DARCHE_XRAY=ON`.
 
 ---
 
@@ -42,6 +75,20 @@ bash run_collapse.sh \
 ```
 
 ![Case 1: Primordial H2-cooling with T_CMB](docs/img/quickstart/case1_primordial_h2_tcmb.png)
+
+1-A. Primordial minimal network variant of Case 1 (H2-cooling with `T_CMB` at $z=20$)
+
+```bash
+bash run_collapse.sh \
+  --no-metal \
+  --minimal \
+  --prim-zeta0 0 \
+  --prim-redshift 20 \
+  --fig-combo \
+  --no-resample \
+  --save-dir results/quickstart/case_1A \
+  --out-dir results/quickstart/case_1A
+```
 
 2. Primordial (HD-cooling) with slow collapse
 
@@ -88,6 +135,20 @@ bash run_collapse.sh \
 ```
 
 ![Case 4: Low-metallicity with CR](docs/img/quickstart/case4_low_metallicity_cr.png)
+
+4-A. Metal minimal network variant of Case 4 (low-metallicity with `CR`)
+
+```bash
+bash run_collapse.sh \
+  --no-prim \
+  --metal-minimal \
+  --metal-zeta0 1e-17 \
+  --metal-z-metal 1e-3 \
+  --fig-combo \
+  --no-resample \
+  --save-dir results/quickstart/case_4A \
+  --out-dir results/quickstart/case_4A
+```
 
 5. Solar metallicity
 
