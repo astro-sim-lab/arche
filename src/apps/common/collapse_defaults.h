@@ -19,8 +19,8 @@
 namespace collapse_defaults {
 
 // ─── Physical constants (CGS; aliases of arche::phys, see core/state.h) ─────
-constexpr double kKB = arche::phys::k_B;          // [erg/K]
-constexpr double kMp = arche::phys::m_p;          // [g]
+constexpr double kKB = arche::phys::k_B;  // [erg/K]
+constexpr double kMp = arche::phys::m_p;  // [g]
 constexpr double kPi = arche::phys::pi;
 constexpr double kGGrav = arche::phys::G;         // [cm^3 g^-1 s^-2]
 constexpr double kSigmaB = arche::phys::sigma_B;  // [erg cm^-2 s^-1 K^-4]
@@ -39,10 +39,11 @@ constexpr double kDtFactor = 1.0e-3;  // timestep fraction of min(t_cool, t_eff)
 constexpr double kDtFactorChem =
     1.0e50;  // timestep fraction of t_chem (1e50 = disabled by default)
 constexpr double kDtFactorInit =
-    1.0e-8;                           // timestep fraction during initial phase
-constexpr int kNInitSteps = 10;       // number of initial short-timestep steps
-constexpr double kXnHStop = 1.0e23;   // density ceiling [cm^-3]
-constexpr double kTHighStop = 1.0e5;  // temperature ceiling (validated T_max) [K]
+    1.0e-8;                          // timestep fraction during initial phase
+constexpr int kNInitSteps = 10;      // number of initial short-timestep steps
+constexpr double kXnHStop = 1.0e23;  // density ceiling [cm^-3]
+constexpr double kTHighStop =
+    1.0e5;  // temperature ceiling (validated T_max) [K]
 // HDF5 output stride: write every N-th step.
 // Unified to 10 (formerly prim=100, metal=10).
 constexpr int kOutputStride = 10;

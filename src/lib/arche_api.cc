@@ -66,8 +66,9 @@ struct MetalMinimalTable {
 };
 static_assert(zero_metal_minimal::N_sp == 15,
               "ChemStatePrimMinimal in arche_api.h assumes 15 compact species");
-static_assert(metal_grain_minimal::N_sp == 40,
-              "ChemStateMetalMinimal in arche_api.h assumes 40 compact species");
+static_assert(
+    metal_grain_minimal::N_sp == 40,
+    "ChemStateMetalMinimal in arche_api.h assumes 40 compact species");
 
 // ── Cell lifecycle ─────────────────────────────────────────────────────────
 PrimCell* prim_cell_create() { return new PrimCell(); }
@@ -118,7 +119,7 @@ PrimTable* load_prim_table(const std::string& h5_path) {
   auto* tbl = new PrimTable();
   try {
     zero_metal::net::init_topology(tbl->impl);  // topology from C++ source
-    load_pf_tables_h5(tbl->impl, h5_path);  // partition functions from HDF5
+    load_pf_tables_h5(tbl->impl, h5_path);      // partition functions from HDF5
   } catch (...) {
     delete tbl;
     throw;

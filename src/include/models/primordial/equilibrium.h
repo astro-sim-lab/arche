@@ -15,9 +15,9 @@
 #include <array>
 #include <cmath>
 
-#include "kinetics/reaction_index.h"
 #include "core/newton.h"  // newton_solve, CramerSolve2, NewtonOpts
 #include "kinetics/rates.h"
+#include "kinetics/reaction_index.h"
 #include "models/primordial/minimal.h"
 #include "models/primordial/partition_function_prim.h"
 
@@ -64,10 +64,11 @@ void build_saha_keqb(double T_K, const ReactionTable<N_sp, N_react>& tbl,
   }
 }
 
-// Fill the seven shared H-network species (H, H2, e-, H+, H2+, H3+, H-) from the
-// Saha trial (ye, yh) and the H equilibrium ratios; returns y_H+ (used by the
-// He/D/Li blocks).  Templated on the model's Sp enum so the same fill serves the
-// full and compact primordial index spaces (both lay H..H- out identically).
+// Fill the seven shared H-network species (H, H2, e-, H+, H2+, H3+, H-) from
+// the Saha trial (ye, yh) and the H equilibrium ratios; returns y_H+ (used by
+// the He/D/Li blocks).  Templated on the model's Sp enum so the same fill
+// serves the full and compact primordial index spaces (both lay H..H- out
+// identically).
 template <class Sp, std::size_t N>
 double fill_H_saha(double ye, double yh, double K_Hp, double K_Hm, double K_H2p,
                    double K_H2, double K_H3p, std::array<double, N>& yy) {
@@ -146,8 +147,7 @@ void equichem(double nH, double T_K, std::array<double, N_sp>& y,
 
   // Helper: fill all species from y_e, y_H
   auto fill_y = [&](double ye, double yh, std::array<double, N_sp>& yy) {
-    double y_Hp =
-        fill_H_saha<Sp>(ye, yh, K_Hp, K_Hm, K_H2p, K_H2, K_H3p, yy);
+    double y_Hp = fill_H_saha<Sp>(ye, yh, K_Hp, K_Hm, K_H2p, K_H2, K_H3p, yy);
 
     // He sequence
     {
@@ -243,9 +243,8 @@ struct FullPrimSaha {
 // functions evaluated by canonical identity (pf_for_prim).
 // ─────────────────────────────────────────────────────────────────────────────
 template <int N_sp, int N_react>
-void equichem_minimal(double nH, double T_K,
-                              std::array<double, N_sp>& y,
-                              const ReactionTable<N_sp, N_react>& tbl) {
+void equichem_minimal(double nH, double T_K, std::array<double, N_sp>& y,
+                      const ReactionTable<N_sp, N_react>& tbl) {
   using Sp = zero_metal_minimal::Sp;
   constexpr double yHe = abundance_ref::yHe;
   constexpr double yD = abundance_ref::yD;
@@ -278,8 +277,9 @@ void equichem_minimal(double nH, double T_K,
 
   auto fill_y = [&](double ye, double yh, std::array<double, N_sp>& yy) {
     fill_H_saha<Sp>(ye, yh, K_Hp, K_Hm, K_H2p, K_H2, K_H3p, yy);
-    yy[Sp::He] = yHe;   // neutral background
-    yy[Sp::Hep] = 0.0;  // He+ negligible at nH>1e18 (kept out of charge balance)
+    yy[Sp::He] = yHe;  // neutral background
+    yy[Sp::Hep] =
+        0.0;  // He+ negligible at nH>1e18 (kept out of charge balance)
     {
       double den = 1.0 + K_HD * yh + K_Dp / ye;
       yy[Sp::D] = yD / den;

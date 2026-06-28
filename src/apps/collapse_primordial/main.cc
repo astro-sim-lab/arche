@@ -95,8 +95,8 @@
 #include "collapse_defaults.h"
 #include "collapse_driver.h"
 #include "collapse_dynamics.h"
-#include "cooling/cooling.h"             // c_H2 (initial mu/gamma estimate)
-#include "cooling/xray_secondary.h"      // xray::sigma_HI_Verner96 (ARCHE_XRAY)
+#include "cooling/cooling.h"         // c_H2 (initial mu/gamma estimate)
+#include "cooling/xray_secondary.h"  // xray::sigma_HI_Verner96 (ARCHE_XRAY)
 #include "core/hdf5_utils.h"
 #include "models/primordial/minimal.h"  // zero_metal_minimal::Sp / N_sp
 
@@ -112,7 +112,7 @@ namespace {
 #ifdef ARCHE_PRIM_MINIMAL
 using AppCell = arche::PrimMinimalCell;
 using AppTable = arche::PrimMinimalTable;
-using AppSp = arche::zero_metal_minimal::Sp;           // compact species indices
+using AppSp = arche::zero_metal_minimal::Sp;  // compact species indices
 constexpr int kNSp = arche::zero_metal_minimal::N_sp;  // 15
 inline double AppChargePlus(const std::array<double, kNSp>& y) {
   return y[AppSp::Hp] + y[AppSp::H2p] + y[AppSp::H3p] + y[AppSp::Hep] +
@@ -665,7 +665,8 @@ int main() {
   std::printf("Output directory: %s/\n", out_dir.c_str());
 
   // ── Build the reaction table (topology + partition functions) ─────────────
-  auto tbl_owned = AppTableCreate(chem_table);  // PrimTablePtr/PrimMinimalTablePtr
+  auto tbl_owned =
+      AppTableCreate(chem_table);  // PrimTablePtr/PrimMinimalTablePtr
   const AppTable& tbl = *tbl_owned;
 
   // ── Required: PRIM_ZETA0 [s^-1] ──────────────────────────────────────────

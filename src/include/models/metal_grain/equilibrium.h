@@ -348,8 +348,7 @@ inline void equichem_metal_minimal(
       double dE = tbl.saha[i].delE;
 
       double lnCpf = std::log(pf[r1]) + std::log(pf[r2]) - std::log(pf[p1]);
-      if (np == 2 &&
-          p2 != metal_grain_minimal::MinimalTable::IDX_PHOTON)
+      if (np == 2 && p2 != metal_grain_minimal::MinimalTable::IDX_PHOTON)
         lnCpf -= std::log(pf[p2]);
 
       double lnKeqb = static_cast<double>(nr - np) * lnT32 + std::log(Cm) +
@@ -361,19 +360,19 @@ inline void equichem_metal_minimal(
 
   // Equilibrium ratio constants (compact slot index → full reaction id):
   // H sequence
-  double K_Hp = Keqb[0] / nH;                                 // id 2
-  double K_Hm = nH / Keqb[2];                                 // id 7
-  double K_H2p = Keqb[0] / Keqb[4];                           // id 2 / id 9
-  double K_H2 = nH / Keqb[2] / Keqb[3];                       // id 7, id 8
-  double K_H3p = nH * Keqb[0] /                               // id 2
-                 (Keqb[2] * Keqb[3] * Keqb[4] * Keqb[5]);     // id 7,8,9,26
+  double K_Hp = Keqb[0] / nH;                              // id 2
+  double K_Hm = nH / Keqb[2];                              // id 7
+  double K_H2p = Keqb[0] / Keqb[4];                        // id 2 / id 9
+  double K_H2 = nH / Keqb[2] / Keqb[3];                    // id 7, id 8
+  double K_H3p = nH * Keqb[0] /                            // id 2
+                 (Keqb[2] * Keqb[3] * Keqb[4] * Keqb[5]);  // id 7,8,9,26
   // He sequence (He, He+ only)
-  double K_Hep = Keqb[1] / nH;                                // id 4
+  double K_Hep = Keqb[1] / nH;  // id 4
   // D sequence (D, HD, D+ only)
-  double K_Dp = Keqb[6] / nH;                                 // id 51
-  double K_HD = nH / Keqb[7];                                 // id 54
+  double K_Dp = Keqb[6] / nH;  // id 51
+  double K_HD = nH / Keqb[7];  // id 54
   // Li sequence (Li, Li+ only)
-  double K_Lip = Keqb[22] / nH;                               // id 801
+  double K_Lip = Keqb[22] / nH;  // id 801
 
   // ── fill_y: write yy[0..30] from (y_e, y_H, y_C, y_O) ──────────────────────
   auto fill_y = [&](auto& yy, double ye, double yh, double yc, double yo) {
@@ -406,25 +405,23 @@ inline void equichem_metal_minimal(
 
     // Mg sequence  (Mg+ from the alkali Saha balance, neutral Mg below)
     yy[Sp::Mgp] = XMg / (1.0 + nH * ye / Keqb[21]);  // id 718
-    yy[Sp::Mg] = (Keqb[21] > 1.0e-300)
-                     ? nH * ye * yy[Sp::Mgp] / Keqb[21]
-                     : 0.0;
+    yy[Sp::Mg] = (Keqb[21] > 1.0e-300) ? nH * ye * yy[Sp::Mgp] / Keqb[21] : 0.0;
 
     // Carbon sequence  (C, CH, CH2, C+)
     yy[Sp::C] = yc;
-    yy[Sp::CH] = yh * yc * nH / Keqb[9];          // id 185
-    yy[Sp::CH2] = yH2 * yc * nH / Keqb[19];       // id 538
-    yy[Sp::Cp] = (yc / ye) * Keqb[13] / nH;       // id 507
+    yy[Sp::CH] = yh * yc * nH / Keqb[9];     // id 185
+    yy[Sp::CH2] = yH2 * yc * nH / Keqb[19];  // id 538
+    yy[Sp::Cp] = (yc / ye) * Keqb[13] / nH;  // id 507
 
     // Oxygen sequence  (O, O2, OH, CO, H2O, HCO and O/C ions)
     yy[Sp::O] = yo;
-    yy[Sp::O2] = yo * yo * nH / Keqb[12];         // id 194
-    yy[Sp::OH] = yh * yo * nH / Keqb[11];         // id 193
-    yy[Sp::CO] = yc * yo * nH / Keqb[10];         // id 187
-    yy[Sp::H2O] = yh * yy[Sp::OH] * nH / Keqb[20];  // id 642
-    yy[Sp::HCO] = Keqb[8] * yH2 * yy[Sp::CO] / yh;  // id 184
-    yy[Sp::Op] = (yo / ye) * Keqb[14] / nH;       // id 515
-    yy[Sp::OHp] = Keqb[15] * yh * yo / ye;        // id 518
+    yy[Sp::O2] = yo * yo * nH / Keqb[12];             // id 194
+    yy[Sp::OH] = yh * yo * nH / Keqb[11];             // id 193
+    yy[Sp::CO] = yc * yo * nH / Keqb[10];             // id 187
+    yy[Sp::H2O] = yh * yy[Sp::OH] * nH / Keqb[20];    // id 642
+    yy[Sp::HCO] = Keqb[8] * yH2 * yy[Sp::CO] / yh;    // id 184
+    yy[Sp::Op] = (yo / ye) * Keqb[14] / nH;           // id 515
+    yy[Sp::OHp] = Keqb[15] * yh * yo / ye;            // id 518
     yy[Sp::H2Op] = Keqb[16] * yh * yy[Sp::OH] / ye;   // id 521
     yy[Sp::H3Op] = Keqb[17] * yh * yy[Sp::H2O] / ye;  // id 523
     yy[Sp::HCOp] = Keqb[18] * yh * yy[Sp::CO] / ye;   // id 527
@@ -434,8 +431,7 @@ inline void equichem_metal_minimal(
   auto F_cha_fn = [&](const auto& yy) -> double {
     return yy[Sp::Hp] + yy[Sp::H2p] + yy[Sp::H3p] + yy[Sp::Hep] + yy[Sp::Dp] +
            yy[Sp::Cp] + yy[Sp::Op] + yy[Sp::OHp] + yy[Sp::H2Op] + yy[Sp::HCOp] +
-           yy[Sp::H3Op] + yy[Sp::Lip] + yy[Sp::Mgp] -
-           (yy[Sp::e] + yy[Sp::Hm]);
+           yy[Sp::H3Op] + yy[Sp::Lip] + yy[Sp::Mgp] - (yy[Sp::e] + yy[Sp::Hm]);
   };
   auto F_hyd_fn = [&](const auto& yy) -> double {
     return yy[Sp::H] + yy[Sp::Hp] + yy[Sp::Hm] + yy[Sp::HD] + yy[Sp::CH] +

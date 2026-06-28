@@ -16,8 +16,8 @@
 // ---------------------------------------------------------------------------
 #include <algorithm>
 
-#include "kinetics/reaction_index.h"
 #include "cooling/grain.h"
+#include "kinetics/reaction_index.h"
 #include "models/metal_grain/reaction_metal_grain_charge.h"
 #include "models/metal_grain/reaction_metal_grain_surface.h"
 #include "models/primordial/rate_laws.h"

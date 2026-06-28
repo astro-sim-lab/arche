@@ -1992,35 +1992,44 @@ inline constexpr std::array<GrainReaction, 148> kGrain = {{
 // (CH + O -> HCO+ + e-) is a chemi-ionization channel present in the arche full
 // network but absent from Nakauchi's reduced network (neither the woIon nor the
 // wiIon Table-1 keep-set carries it).  In the compact ζ=0 deep-recombination
-// regime the reduced network retains an abundant CH/O pool (carbon is not drained
-// to CO2 ice as in the full network), so reaction 196 acts as a spurious electron
+// regime the reduced network retains an abundant CH/O pool (carbon is not
+// drained to CO2 ice as in the full network), so reaction 196 acts as a
+// spurious electron
 // + HCO+ source: it props the gas charge, which the grains balance by symmetric
-// charging (Gr+ ≈ Gr-), producing the gr- spike in fig10 (d1).  It is dropped to
-// match Nakauchi's reduced network; the full network keeps it (CH ≈ 0 there, so
-// it is inert).  Reaction 195 (CH + O -> H + CO) is its neutral sibling: also
-// absent from Nakauchi's reduced network, and dropped for the same fidelity even
-// though it carries no charge.  The slot it vacated holds reaction 54
-// (H + D -> HD + γ, radiative HD formation) — an off-table arche channel retained
-// for full-network fidelity alongside 17, 44 and 233.  Keeping 54 in 195's slot
-// leaves the grain-catalysed special-reaction positions (2H+grain->H2 at compact
-// num 10, 2D+grain->HD at num 26) and the cosmic-ray block undisturbed.
+// charging (Gr+ ≈ Gr-), producing the gr- spike in fig10 (d1).  It is dropped
+// to match Nakauchi's reduced network; the full network keeps it (CH ≈ 0 there,
+// so it is inert).  Reaction 195 (CH + O -> H + CO) is its neutral sibling:
+// also absent from Nakauchi's reduced network, and dropped for the same
+// fidelity even though it carries no charge.  The slot it vacated holds
+// reaction 54 (H + D -> HD + γ, radiative HD formation) — an off-table arche
+// channel retained for full-network fidelity alongside 17, 44 and 233.  Keeping
+// 54 in 195's slot leaves the grain-catalysed special-reaction positions
+// (2H+grain->H2 at compact num 10, 2D+grain->HD at num 26) and the cosmic-ray
+// block undisturbed.
 inline constexpr std::array<int, 68> kMetalMinimalKeep = {{
     2,   4,   7,   8,   9,   10,  17,  19,  21,  23,  24,  26,  28,  30,
     34,  35,  44,  50,  52,  55,  57,  101, 103, 106, 137, 144, 184, 185,
-    189, 191, 193, 54,  214, 215, 233, 256, 261, 262, 263, 279, 283,
-    346, 348, 377, 410, 426, 464, 507, 518, 521, 522, 523, 524, 527, 538,
-    617, 621, 636, 638, 642, 718, 719, 721, 722, 729, 801, 806, 830,
+    189, 191, 193, 54,  214, 215, 233, 256, 261, 262, 263, 279, 283, 346,
+    348, 377, 410, 426, 464, 507, 518, 521, 522, 523, 524, 527, 538, 617,
+    621, 636, 638, 642, 718, 719, 721, 722, 729, 801, 806, 830,
 }};
 
 // Cosmic-ray channels (first-order), 8.  The four direct-CR ionizations lead
 // (they feed the CR-heating sum) and the four CR-induced-photon channels
 // follow.
 inline constexpr std::array<int, 8> kMetalMinimalCRKeep = {{
-    544, 545, 548, 549,   // direct CR: H, He, H2->H+e+H+, H2->e+H2+
-    656, 672, 677, 678,   // CRph: C, O2, H, He
+    544,
+    545,
+    548,
+    549,  // direct CR: H, He, H2->H+e+H+, H2->e+H2+
+    656,
+    672,
+    677,
+    678,  // CRph: C, O2, H, He
 }};
 
-// Ion-grain charge transfer (first-order; reversible R67-R69 keep both rows), 27.
+// Ion-grain charge transfer (first-order; reversible R67-R69 keep both
+// rows), 27.
 inline constexpr std::array<int, 27> kMetalMinimalChargeKeep = {{
     841, 843, 848, 862, 866, 870, 873, 907, 915, 917, 918, 922, 936, 940,
     944, 947, 951, 953, 958, 972, 976, 980, 983, 984, 985, 987, 988,
@@ -2028,8 +2037,16 @@ inline constexpr std::array<int, 27> kMetalMinimalChargeKeep = {{
 
 // Grain-surface freeze-out: adsorption (5) + thermal desorption (5), 10.
 inline constexpr std::array<int, 10> kMetalMinimalGrainKeep = {{
-    7, 9, 10, 12, 17,    // adsorption  O, OH, CO, H2O, C
-    28, 30, 31, 33, 38,  // thermal desorption  O_p, OH_p, CO_p, H2O_p, C_p
+    7,
+    9,
+    10,
+    12,
+    17,  // adsorption  O, OH, CO, H2O, C
+    28,
+    30,
+    31,
+    33,
+    38,  // thermal desorption  O_p, OH_p, CO_p, H2O_p, C_p
 }};
 
 // High-density Saha sub-table: equilibrium constants among the retained

@@ -512,12 +512,22 @@ def plot_comparison(
     handles: List[Line2D] = []
     for case in cases:
         handles.append(
-            Line2D([], [], color=FULL_COLOR, ls=case.linestyle,
-                   label=f"full ({case.label})")
+            Line2D(
+                [],
+                [],
+                color=FULL_COLOR,
+                ls=case.linestyle,
+                label=f"full ({case.label})",
+            )
         )
         handles.append(
-            Line2D([], [], color=MINI_COLOR, ls=case.linestyle,
-                   label=f"minimal ({case.label})")
+            Line2D(
+                [],
+                [],
+                color=MINI_COLOR,
+                ls=case.linestyle,
+                label=f"minimal ({case.label})",
+            )
         )
     if empty_idx:
         ax_list[empty_idx[0]].legend(
@@ -686,8 +696,7 @@ def main() -> int:
             f"delta={m['ye_dex_lognh14']:+.4f} dex"
         )
         print(
-            "  D conservation full/min: "
-            f"{m['d_cons_full']:.4f}/{m['d_cons_mini']:.4f}"
+            f"  D conservation full/min: {m['d_cons_full']:.4f}/{m['d_cons_mini']:.4f}"
         )
         print(
             "  Li conservation full/min: "

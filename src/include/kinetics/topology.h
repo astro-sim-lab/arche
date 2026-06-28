@@ -57,7 +57,7 @@ struct Reaction {
   // than derived at run time: the tabulated values are reduced-precision and
   // the 0.0 / 1.0 sentinels are not reproducible from the masses alone.
   double Cmass = 0.0;
-  double delE = 0.0;               // reaction energy |ΔE| [erg]
+  double delE = 0.0;  // reaction energy |ΔE| [erg]
 };
 
 // Grain-surface reaction (metal_grain only): A + B -> C + D on grain.
@@ -79,8 +79,8 @@ struct SahaReaction {
   std::array<int, 2> products{};  // product indices, photon = N_sp+1 (saha_ps*)
   int n_reactants = 0;            // was saha_nsr
   int n_products = 0;             // was saha_nsp
-  double Cmass = 0.0;            // detailed-balance mass factor (see Reaction::Cmass)
-  double delE = 0.0;              // was saha_dE
+  double Cmass = 0.0;  // detailed-balance mass factor (see Reaction::Cmass)
+  double delE = 0.0;   // was saha_dE
 };
 
 // ---------------------------------------------------------------------------

@@ -47,17 +47,35 @@ MINOR = ["H-", "H2+", "H3+", "He+", "D+", "Li", "LiH", "Li+"]
 
 # Stable per-species colours (tab10 / tab20 picks).
 SPCOL = {
-    "H": "#1f77b4", "He": "#ff7f0e", "e-": "#2ca02c",
-    "H+": "#d62728", "D": "#9467bd",
-    "H-": "#8c564b", "H2+": "#e377c2", "H3+": "#7f7f7f",
-    "He+": "#bcbd22", "D+": "#17becf", "Li": "#aec7e8",
-    "LiH": "#ffbb78", "Li+": "#c5b0d5",
+    "H": "#1f77b4",
+    "He": "#ff7f0e",
+    "e-": "#2ca02c",
+    "H+": "#d62728",
+    "D": "#9467bd",
+    "H-": "#8c564b",
+    "H2+": "#e377c2",
+    "H3+": "#7f7f7f",
+    "He+": "#bcbd22",
+    "D+": "#17becf",
+    "Li": "#aec7e8",
+    "LiH": "#ffbb78",
+    "Li+": "#c5b0d5",
 }
 # Display labels (matplotlib mathtext).
 SPLAB = {
-    "H": r"H", "He": r"He", "e-": r"$e^-$", "H+": r"H$^+$", "D": r"D",
-    "H-": r"H$^-$", "H2+": r"H$_2^+$", "H3+": r"H$_3^+$", "He+": r"He$^+$",
-    "D+": r"D$^+$", "Li": r"Li", "LiH": r"LiH", "Li+": r"Li$^+$",
+    "H": r"H",
+    "He": r"He",
+    "e-": r"$e^-$",
+    "H+": r"H$^+$",
+    "D": r"D",
+    "H-": r"H$^-$",
+    "H2+": r"H$_2^+$",
+    "H3+": r"H$_3^+$",
+    "He+": r"He$^+$",
+    "D+": r"D$^+$",
+    "Li": r"Li",
+    "LiH": r"LiH",
+    "Li+": r"Li$^+$",
 }
 H2COL, HDCOL = "#1f77b4", "#d62728"
 
@@ -80,10 +98,14 @@ def frac(d, name):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--h5dir", default="results/nakauchi2019",
-                    help="Directory containing collapse_CR*.h5")
-    ap.add_argument("--save", default="results/nakauchi2019",
-                    help="Output directory for the PNG")
+    ap.add_argument(
+        "--h5dir",
+        default="results/nakauchi2019",
+        help="Directory containing collapse_CR*.h5",
+    )
+    ap.add_argument(
+        "--save", default="results/nakauchi2019", help="Output directory for the PNG"
+    )
     ap.add_argument("--show", action="store_true")
     args = ap.parse_args()
 
@@ -95,13 +117,14 @@ def main():
         # Full = thick dashed line (drawn first); reduced = thin solid line on
         # top. Agreement shows as the thin solid line tracking the dashes;
         # divergence shows as the solid line leaving the dashes.
-        for d, lw, ls, alpha, z in ((dful, 2.6, "--", 0.9, 1),
-                                    (dmin, 1.4, "-", 1.0, 2)):
+        for d, lw, ls, alpha, z in (
+            (dful, 2.6, "--", 0.9, 1),
+            (dmin, 1.4, "-", 1.0, 2),
+        ):
             if d is None:
                 continue
             nH = d["nH"]
-            kw = dict(lw=lw, ls=ls, alpha=alpha, zorder=z,
-                      solid_capstyle="round")
+            kw = dict(lw=lw, ls=ls, alpha=alpha, zorder=z, solid_capstyle="round")
             # (a) temperature — single black curve per network
             axes[0, col].plot(nH, d["T"], color="k", **kw)
             # (b) H2 / HD
@@ -149,29 +172,49 @@ def main():
 
     # H2 / HD annotations
     for c in range(3):
-        axes[1, c].text(0.62, 0.80, r"H$_2$", color=H2COL,
-                        transform=axes[1, c].transAxes, fontsize=10)
-        axes[1, c].text(0.62, 0.20, "HD", color=HDCOL,
-                        transform=axes[1, c].transAxes, fontsize=10)
+        axes[1, c].text(
+            0.62,
+            0.80,
+            r"H$_2$",
+            color=H2COL,
+            transform=axes[1, c].transAxes,
+            fontsize=10,
+        )
+        axes[1, c].text(
+            0.62, 0.20, "HD", color=HDCOL, transform=axes[1, c].transAxes, fontsize=10
+        )
 
     # Legends
     nethandles = [
-        Line2D([0], [0], color="k", lw=1.4, ls="-", alpha=1.0,
-               label="reduced (Minimal, 15 sp)"),
-        Line2D([0], [0], color="k", lw=2.6, ls="--", alpha=0.9,
-               label="full (Nakauchi2019, 23 sp)"),
+        Line2D(
+            [0],
+            [0],
+            color="k",
+            lw=1.4,
+            ls="-",
+            alpha=1.0,
+            label="reduced (Minimal, 15 sp)",
+        ),
+        Line2D(
+            [0],
+            [0],
+            color="k",
+            lw=2.6,
+            ls="--",
+            alpha=0.9,
+            label="full (Nakauchi2019, 23 sp)",
+        ),
     ]
-    axes[0, 0].legend(handles=nethandles, fontsize=8, loc="lower right",
-                      framealpha=0.9)
+    axes[0, 0].legend(handles=nethandles, fontsize=8, loc="lower right", framealpha=0.9)
 
-    major_h = [Line2D([0], [0], color=SPCOL[s], lw=2, label=SPLAB[s])
-               for s in MAJOR]
-    minor_h = [Line2D([0], [0], color=SPCOL[s], lw=2, label=SPLAB[s])
-               for s in MINOR]
-    axes[2, 2].legend(handles=major_h, fontsize=8, ncol=2, loc="lower right",
-                      framealpha=0.9)
-    axes[3, 2].legend(handles=minor_h, fontsize=8, ncol=2, loc="lower right",
-                      framealpha=0.9)
+    major_h = [Line2D([0], [0], color=SPCOL[s], lw=2, label=SPLAB[s]) for s in MAJOR]
+    minor_h = [Line2D([0], [0], color=SPCOL[s], lw=2, label=SPLAB[s]) for s in MINOR]
+    axes[2, 2].legend(
+        handles=major_h, fontsize=8, ncol=2, loc="lower right", framealpha=0.9
+    )
+    axes[3, 2].legend(
+        handles=minor_h, fontsize=8, ncol=2, loc="lower right", framealpha=0.9
+    )
 
     fig.suptitle(
         "Primordial reduced-vs-full collapse — arche-dev zero-metal network "

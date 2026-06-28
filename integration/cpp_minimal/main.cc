@@ -33,9 +33,9 @@ int main(int argc, char** argv) {
     // Index y[] by species name (the order is model-specific; see
     // core/species_index.h).
     s.y.fill(0.0);
-    s.y[zm::H] = 1.0 - 1.0e-4;               // atomic H (~all of nH)
-    s.y[zm::e] = 1.0e-4;                     // electrons
-    s.y[zm::Hp] = 1.0e-4;                    // H+ (balances e-)
+    s.y[zm::H] = 1.0 - 1.0e-4;                // atomic H (~all of nH)
+    s.y[zm::e] = 1.0e-4;                      // electrons
+    s.y[zm::Hp] = 1.0e-4;                     // H+ (balances e-)
     s.y[zm::He] = arche::abundance_ref::yHe;  // He, n(He)/nH
 
     arche::ChemParams params{};

@@ -153,11 +153,11 @@ enum class PfKind { Constant, Analytic, Bc16, NumericTable };
 
 struct PfProvider {
   PfKind kind = PfKind::Constant;
-  double constant = 1.0;                          // Constant
-  double (*analytic)(double T_K) = nullptr;       // Analytic
-  const std::array<double, 32>* bc16 = nullptr;   // Bc16 (uses kTBC grid)
-  double divisor = 1.0;                            // NumericTable scaling
-  bool floor_one = false;                          // NumericTable floor at 1.0
+  double constant = 1.0;                         // Constant
+  double (*analytic)(double T_K) = nullptr;      // Analytic
+  const std::array<double, 32>* bc16 = nullptr;  // Bc16 (uses kTBC grid)
+  double divisor = 1.0;                          // NumericTable scaling
+  bool floor_one = false;                        // NumericTable floor at 1.0
 };
 
 inline PfProvider pf_const(double c) {

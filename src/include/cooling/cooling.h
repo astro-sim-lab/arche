@@ -305,11 +305,11 @@ inline double hd_cooling(double nH, double T_K, double rho, double y_HD,
 //   Subtracts CMB background contribution (evaluated at T_rad)
 //
 //   Species are addressed through the caller-supplied Sp enum (the model's own
-//   index space): y[Sp::H], y[Sp::H2], y[Sp::e], y[Sp::Hp], y[Sp::He], y[Sp::HD].
-//   This matters because the compact Nakauchi2019_Minimal lays HD at a different
-//   local index (10) than the full/metal networks (12); using the model's Sp
-//   keeps every model's HD/H2 cooling correct (full/metal stay bit-for-bit since
-//   their indices are unchanged).
+//   index space): y[Sp::H], y[Sp::H2], y[Sp::e], y[Sp::Hp], y[Sp::He],
+//   y[Sp::HD]. This matters because the compact Nakauchi2019_Minimal lays HD at
+//   a different local index (10) than the full/metal networks (12); using the
+//   model's Sp keeps every model's HD/H2 cooling correct (full/metal stay
+//   bit-for-bit since their indices are unchanged).
 // ─────────────────────────────────────────────────────────────────────────────
 template <class Sp, int N_sp>
 void line_cool(const std::array<double, N_sp>& y, double Nc_H2, double Nc_HD,

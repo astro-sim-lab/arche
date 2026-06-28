@@ -473,16 +473,16 @@ void RunCollapse(
   }
   const double y_D = abund.yD - y_Dp - y_HD;
 
-  y[AppSp::H] = y_H;                  // H
-  y[AppSp::H2] = y_H2;                // H2
-  y[AppSp::Hp] = y_Hp;                // H+
-  y[AppSp::He] = abund.yHe;           // He
-  y[AppSp::D] = y_D;                  // D
-  y[AppSp::HD] = y_HD;                // HD
-  y[AppSp::Dp] = y_Dp;                // D+
-  y[AppSp::Lip] = abund.yLi;          // Li+
-  y[AppSp::C] = XC * c_gas_frac;      // CI
-  y[AppSp::O] = XO * o_gas_frac;      // OI
+  y[AppSp::H] = y_H;              // H
+  y[AppSp::H2] = y_H2;            // H2
+  y[AppSp::Hp] = y_Hp;            // H+
+  y[AppSp::He] = abund.yHe;       // He
+  y[AppSp::D] = y_D;              // D
+  y[AppSp::HD] = y_HD;            // HD
+  y[AppSp::Dp] = y_Dp;            // D+
+  y[AppSp::Lip] = abund.yLi;      // Li+
+  y[AppSp::C] = XC * c_gas_frac;  // CI
+  y[AppSp::O] = XO * o_gas_frac;  // OI
 #ifndef ARCHE_METAL_MINIMAL
   y[AppSp::Kp] = 0.0;   // K+  (initially zero; absent from the compact network)
   y[AppSp::Nap] = 0.0;  // Na+ (initially zero; absent from the compact network)
@@ -492,8 +492,8 @@ void RunCollapse(
 #ifdef ARCHE_METAL_MINIMAL
   y[AppSp::e] = y_Hp + y_Dp + abund.yLi + y[AppSp::Mgp];
 #else
-  y[AppSp::e] = y_Hp + y_Dp + abund.yLi + y[AppSp::Kp] + y[AppSp::Nap] +
-                y[AppSp::Mgp];
+  y[AppSp::e] =
+      y_Hp + y_Dp + abund.yLi + y[AppSp::Kp] + y[AppSp::Nap] + y[AppSp::Mgp];
 #endif
 
   // MRN grain abundance: yGr = Z_metal * kGrNorm * (1+4yHe)*mp / <vol>
@@ -527,7 +527,7 @@ void RunCollapse(
   double yOs = XO * (1.0 - o_gas_frac);
   double yMgs = XMg * (1.0 - mg_gas_frac);
 #ifndef ARCHE_METAL_MINIMAL
-  double yKs = XKa;   // K / Na reservoirs are absent from the compact network
+  double yKs = XKa;  // K / Na reservoirs are absent from the compact network
   double yNas = XNa;
 #endif
   int switch_gr = 1;  // 1 = grains present, 2 = fully evaporated
@@ -543,8 +543,8 @@ void RunCollapse(
   // left-to-right fold.
   double mu_denom = y[AppSp::H] + y[AppSp::H2] + y[AppSp::e] + y[AppSp::Hp] +
                     y[AppSp::He] + y[AppSp::Hep];
-  double mono = y[AppSp::H] + y[AppSp::e] + y[AppSp::Hp] + y[AppSp::He] +
-                y[AppSp::Hep];
+  double mono =
+      y[AppSp::H] + y[AppSp::e] + y[AppSp::Hp] + y[AppSp::He] + y[AppSp::Hep];
 #ifndef ARCHE_METAL_MINIMAL
   mu_denom += y[AppSp::Hepp];
   mono += y[AppSp::Hepp];
@@ -705,8 +705,7 @@ void RunCollapse(
     const auto y_prev = y;
     Clock::time_point t_bench;
     if (bench_fp) t_bench = Clock::now();
-    const auto rates =
-        AppChemFullStep(*cell, dt, params, shield, tbl);
+    const auto rates = AppChemFullStep(*cell, dt, params, shield, tbl);
     if (rates.solver_failed) {
       exit_reason = ExitReason::SolverFailed;
       break;
@@ -754,7 +753,7 @@ void RunCollapse(
         // metals.  The compact network has no K / Na (and no Gr2+), so its net
         // grain charge goes to the electrons directly and only Mg is released.
 #ifdef ARCHE_METAL_MINIMAL
-        double del_yp = y[AppSp::Grp];                        // Gr+
+        double del_yp = y[AppSp::Grp];                         // Gr+
         double del_ym = y[AppSp::Grm] + 2.0 * y[AppSp::Gr2m];  // Gr- + 2*Gr2-
         y[AppSp::e] += (del_ym - del_yp);  // net grain charge -> electrons
         y[AppSp::Mg] += yMgs;              // Mg neutral released
@@ -897,8 +896,8 @@ void RunCollapse(
     std::printf(
         "%7d %11.3E %11.3E %11.3E %11.3E %11.3E %11.3E"
         " %11.3E %11.3E %11.3E\n",
-        it, zeta0 / 1.0e-17, Z_metal, nH, T_K, y[AppSp::e], y[AppSp::H2], y_plus,
-        y_minus, charge_imbal);
+        it, zeta0 / 1.0e-17, Z_metal, nH, T_K, y[AppSp::e], y[AppSp::H2],
+        y_plus, y_minus, charge_imbal);
 
     if (collapse_driver::check_exit(nH, T_K, e, nH_stop, exit_reason)) break;
   }

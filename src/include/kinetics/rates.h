@@ -8,8 +8,8 @@
 
 #include "core/state.h"
 #include "kinetics/partition_function.h"
-#include "kinetics/topology.h"
 #include "kinetics/reaction_index.h"
+#include "kinetics/topology.h"
 
 // ---------------------------------------------------------------------------
 // Shared reaction-rate primitives (model-independent).

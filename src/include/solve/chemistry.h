@@ -56,14 +56,14 @@
 #include "cooling/cooling_molecular.h"  // line_cool_metal, LineCoolRates, EscapeState
 #include "core/state.h"  // ChemState, ChemParams, ChemRates, ChemShielding,
 #include "kinetics/topology.h"  // ReactionTable + load_pf_tables_h5
-#include "solve/chemreact.h"  // chemreact, chemcool, compute_chemistry_cooling
 #include "models/metal_grain/equilibrium.h"  // equichem_metal; pulls in rates.h
-#include "models/metal_grain/reactions.h"   // metal_grain::net::init_topology
-#include "models/primordial/equilibrium.h"  // equichem, equichem_minimal
-#include "models/primordial/reactions.h"    // zero_metal::net::init_topology
-                                            // ChemFullRates, phys::
+#include "models/metal_grain/reactions.h"    // metal_grain::net::init_topology
+#include "models/primordial/equilibrium.h"   // equichem, equichem_minimal
+#include "models/primordial/reactions.h"     // zero_metal::net::init_topology
+#include "solve/chemreact.h"  // chemreact, chemcool, compute_chemistry_cooling
+                              // ChemFullRates, phys::
 #include "kinetics/reaction_index.h"  // zero_metal::, metal_grain:: constants
-#include "model_traits.h"  // Nakauchi2019, Nakauchi2021
+#include "model_traits.h"             // Nakauchi2019, Nakauchi2021
 #ifdef ARCHE_XRAY
 #include "cooling/xray_secondary.h"  // X-ray secondary ionization / heating
 #endif
@@ -191,8 +191,8 @@ ChemFullRates chem_full_step(
     double Lambda_line_prim;
     LineCoolRates mcool{};
     line_cool<Sp, N_sp>(cell.state.y, shield.Nc_H2, shield.Nc_HD, cell.state.nH,
-                        cell.state.T_K, p.T_rad, shield.tau_cnt, Lambda_line_prim,
-                        mcool.H2, mcool.HD, mcool.Lya);
+                        cell.state.T_K, p.T_rad, shield.tau_cnt,
+                        Lambda_line_prim, mcool.H2, mcool.HD, mcool.Lya);
     const auto& y = cell.state.y;
     line_cool_metal(cell.state.nH, cell.state.T_K, p.T_rad, y[Sp::H], y[Sp::H2],
                     y[Sp::e], y[Sp::Hp], y[Sp::He], y[Sp::C], y[Sp::Cp],

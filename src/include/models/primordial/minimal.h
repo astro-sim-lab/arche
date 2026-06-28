@@ -27,8 +27,8 @@
 // ---------------------------------------------------------------------------
 #include <array>
 
-#include "kinetics/reaction_index.h"
 #include "core/species_catalog.h"
+#include "kinetics/reaction_index.h"
 #include "kinetics/topology.h"
 #include "models/primordial/reactions.h"
 
@@ -150,7 +150,8 @@ inline bool build_topology(MinimalTable& tbl, int* bad_species = nullptr) {
     return ok;
   };
 
-  // Build one compact reaction row from a full-network keep id (lookup + remap).
+  // Build one compact reaction row from a full-network keep id (lookup +
+  // remap).
   auto build_row = [&](int keep_num, int slot, Reaction& d) -> bool {
     const Reaction* src = nullptr;
     for (const auto& r : zero_metal::net::kReactions)

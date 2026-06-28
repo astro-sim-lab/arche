@@ -365,7 +365,8 @@ const char* const* arche_model_species(const ArcheModelRuntime* model) {
 }
 const char* arche_model_name(const ArcheModelRuntime* model) {
   if (!model) return nullptr;
-  return arche::model_name(*reinterpret_cast<const arche::ModelRuntime*>(model));
+  return arche::model_name(
+      *reinterpret_cast<const arche::ModelRuntime*>(model));
 }
 int arche_model_count(void) { return arche::model_count(); }
 const char* arche_model_registry_name(int i) {
@@ -402,9 +403,8 @@ void arche_model_cell_set_scalars(ArcheModelCell* cell, double nH, double T_K,
 void arche_model_cell_get_scalars(const ArcheModelCell* cell, double* nH,
                                   double* T_K, double* mu, double* gamma) {
   if (!cell) return;
-  arche::ModelCell& c =
-      *const_cast<arche::ModelCell*>(
-          reinterpret_cast<const arche::ModelCell*>(cell));
+  arche::ModelCell& c = *const_cast<arche::ModelCell*>(
+      reinterpret_cast<const arche::ModelCell*>(cell));
   if (nH) *nH = arche::model_cell_nH(c);
   if (T_K) *T_K = arche::model_cell_T_K(c);
   if (mu) *mu = arche::model_cell_mu(c);
@@ -416,10 +416,10 @@ int arche_model_step(const ArcheModelRuntime* model, ArcheModelCell* cell,
                      ArcheChemFullRates* out) {
   if (!model || !cell || !params || !shield) return ARCHE_ERR_NULL;
   return guarded([&] {
-    arche::ChemFullRates r = arche::model_step(
-        *reinterpret_cast<const arche::ModelRuntime*>(model),
-        *reinterpret_cast<arche::ModelCell*>(cell), dt, to_cpp(*params),
-        to_cpp(*shield));
+    arche::ChemFullRates r =
+        arche::model_step(*reinterpret_cast<const arche::ModelRuntime*>(model),
+                          *reinterpret_cast<arche::ModelCell*>(cell), dt,
+                          to_cpp(*params), to_cpp(*shield));
     if (out) from_cpp(r, *out);
   });
 }

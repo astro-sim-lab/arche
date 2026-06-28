@@ -26,9 +26,9 @@
 #include <array>
 #include <cmath>
 
-#include "kinetics/reaction_index.h"
 #include "core/state.h"
 #include "kinetics/rates.h"
+#include "kinetics/reaction_index.h"
 
 namespace arche {
 
@@ -990,8 +990,8 @@ inline void compute_HHeD_rates(std::array<double, 2 * N_react>& k_rxn,
 // ---------------------------------------------------------------------------
 // compute_CR_rates_prim — CR + CR-photo reactions for the primordial network.
 //
-// Writes the 9 CR channel rates into k_rxn[cr_base + 0..8].  cr_base defaults to
-// the full network's CR block head (k_rxn[130..138]); the compact
+// Writes the 9 CR channel rates into k_rxn[cr_base + 0..8].  cr_base defaults
+// to the full network's CR block head (k_rxn[130..138]); the compact
 // Nakauchi2019_Minimal passes its own CR-block head so the same channel set is
 // emitted at its compact slots.  The full default reproduces the original
 // k_rxn[130..138] writes verbatim (bit-for-bit).

@@ -130,8 +130,8 @@ struct Nakauchi2021_Minimal {
   static constexpr bool is_compact_prim = false;
   static constexpr bool is_compact_metal = true;
   static constexpr bool has_escape = true;
-  // The grain-coverage feedback (params.J_H2 / J_tot from the physisorbed H2 and
-  // chemisorbed H/D abundances) needs species the compact network drops
+  // The grain-coverage feedback (params.J_H2 / J_tot from the physisorbed H2
+  // and chemisorbed H/D abundances) needs species the compact network drops
   // (H2_p, H_c, D_c), so it is disabled; the compact model carries only the
   // O/OH/CO/H2O/C ice-mantle freeze-out, not H2 physisorption shielding.
   static constexpr bool has_uv_shield = false;
@@ -196,7 +196,8 @@ struct Nakauchi2021_Minimal {
     // physisorbed / chemisorbed H species (H_p / H_c) the network drops.
     struct grain_H2 {
       static constexpr bool has_surface = false;
-      static constexpr int two_H = metal_grain_minimal::special::rxn_2H_grain - 1;
+      static constexpr int two_H =
+          metal_grain_minimal::special::rxn_2H_grain - 1;
       static constexpr int surface_grgr = -1;
       static constexpr int surface_grdust = -1;
       static constexpr int H_dust_3body = -1;

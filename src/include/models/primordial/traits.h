@@ -122,7 +122,8 @@ struct Nakauchi2019_Minimal {
   static constexpr bool secant_skip_high_density = true;
 
   // CR heating sums the 6 direct ionization channels (compact slots 24..29).
-  static constexpr int cr_heat_var_begin = zero_metal_minimal::cr_heat_var_begin;
+  static constexpr int cr_heat_var_begin =
+      zero_metal_minimal::cr_heat_var_begin;
   static constexpr int cr_heat_var_end = zero_metal_minimal::cr_heat_var_end;
 
   struct cooling {

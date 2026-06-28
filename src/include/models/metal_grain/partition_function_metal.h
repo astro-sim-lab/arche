@@ -22,8 +22,8 @@
 #include <utility>
 #include <vector>
 
-#include "core/species_index.h"
 #include "core/species_catalog.h"
+#include "core/species_index.h"
 #include "core/state.h"
 #include "kinetics/partition_function.h"  // PfProvider, pf_eval, detail::*
 #include "kinetics/topology.h"            // ReactionTable
@@ -43,8 +43,9 @@ template <int N_sp, int N_react>
 void eval_metal_partition_functions(double T_K,
                                     const ReactionTable<N_sp, N_react>& tbl,
                                     std::array<double, N_sp + 3>& pf) {
-  static_assert(N_sp == metal_grain::N_sp,
-                "eval_metal_partition_functions is for the metal_grain network");
+  static_assert(
+      N_sp == metal_grain::N_sp,
+      "eval_metal_partition_functions is for the metal_grain network");
   constexpr double k_B = phys::k_B;
 
   pf.fill(1.0);  // default: sentinel value for vacant/photon and grain slots
@@ -113,19 +114,19 @@ void eval_metal_partition_functions(double T_K,
   if (T_K <= 600.0) {
     pf[19] = asym_top(2211494.0, 253618.1, 215102.2, 1.5);
   } else {
-    pf[19] = std::pow(10.0, 5.05057221 - 3.7971851 * lg_th +
-                                0.928883 * lg_th2 + 0.44249 * lg_th3 +
-                                0.14807 * lg_th4 - 0.37003 * lg_th5);
+    pf[19] = std::pow(10.0, 5.05057221 - 3.7971851 * lg_th + 0.928883 * lg_th2 +
+                                0.44249 * lg_th3 + 0.14807 * lg_th4 -
+                                0.37003 * lg_th5);
   }
 
   // pf[20]: CH3 (HITRAN file / 8 for T<=500, I88 for T>500)
   if (T_K <= 500.0) {
     pf[20] = detail::pf_interp(tbl.pf_table[20], T_K) / 8.0;
   } else {
-    pf[20] = std::pow(10.0, 6.2439699776 - 5.909173844 * lg_th +
-                                1.5818662 * lg_th2 + 0.767593 * lg_th3 +
-                                0.449532 * lg_th4 - 1.04287 * lg_th5 +
-                                0.264771 * lg_th6);
+    pf[20] =
+        std::pow(10.0, 6.2439699776 - 5.909173844 * lg_th + 1.5818662 * lg_th2 +
+                           0.767593 * lg_th3 + 0.449532 * lg_th4 -
+                           1.04287 * lg_th5 + 0.264771 * lg_th6);
   }
 
   // pf[21]: CH4 (HITRAN file / 16 for T<=3500, I88 for T>3500)
@@ -249,9 +250,9 @@ void eval_metal_partition_functions(double T_K,
   if (T_K <= 5000.0) {
     pf[36] = detail::pf_interp(tbl.pf_table[36], T_K);
   } else {
-    pf[36] = std::pow(10.0, 6.01081285 - 4.438833 * lg_th +
-                                0.840462 * lg_th2 + 0.2945 * lg_th3 +
-                                0.3694 * lg_th4 - 0.273 * lg_th5);
+    pf[36] =
+        std::pow(10.0, 6.01081285 - 4.438833 * lg_th + 0.840462 * lg_th2 +
+                           0.2945 * lg_th3 + 0.3694 * lg_th4 - 0.273 * lg_th5);
   }
 
   // pf[37]: H2CO (HITRAN file / 4)
@@ -320,10 +321,10 @@ void eval_metal_partition_functions(double T_K,
   if (T_K <= 500.0) {
     pf[46] = asym_top(334405.0, 334405.0, 184725.0, 1.0 / 3.0);
   } else {
-    pf[46] = std::pow(10.0, 5.6188225644 - 5.599410492 * lg_th +
-                                1.8194835 * lg_th2 + 0.774831 * lg_th3 +
-                                0.404714 * lg_th4 - 1.53688 * lg_th5 +
-                                0.655507 * lg_th6);
+    pf[46] =
+        std::pow(10.0, 5.6188225644 - 5.599410492 * lg_th + 1.8194835 * lg_th2 +
+                           0.774831 * lg_th3 + 0.404714 * lg_th4 -
+                           1.53688 * lg_th5 + 0.655507 * lg_th6);
   }
 
   // pf[47]: H2CO+ (asymmetric top)

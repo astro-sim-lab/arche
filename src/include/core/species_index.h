@@ -11,7 +11,8 @@
 // per-cell state vector by name:
 //
 //   * abundance_ref::                — cosmic/solar reference number ratios
-//   * <model>::Sp                    — y[] index enums (e.g. zero_metal::H == 0)
+//   * <model>::Sp                    — y[] index enums (e.g. zero_metal::H ==
+//   0)
 //   * <model>::N_sp / N_react        — network sizes
 //   * <model>:: abundance constants  — per-model cosmic/solar ratios
 //   * abundance::                    — runtime abundance-preset selection
@@ -128,8 +129,8 @@ using Species = SpeciesSet<
     SpId::Gr2p, SpId::Grm, SpId::Gr2m, SpId::H_p, SpId::H_c, SpId::H2_p,
     SpId::D_p, SpId::D_c, SpId::HD_p, SpId::O_p, SpId::O2_p, SpId::OH_p,
     SpId::CO_p, SpId::CO2_p, SpId::H2O_p, SpId::HO2_p, SpId::H2O2_p,
-    SpId::HCO_p, SpId::H2CO_p, SpId::C_p, SpId::CH_p, SpId::CH2_p,
-    SpId::CH3_p, SpId::CH4_p>;
+    SpId::HCO_p, SpId::H2CO_p, SpId::C_p, SpId::CH_p, SpId::CH2_p, SpId::CH3_p,
+    SpId::CH4_p>;
 
 constexpr int N_sp = Species::N;
 
@@ -177,16 +178,16 @@ enum Sp : int {
   CO2 = Species::local(SpId::CO2),
   H2CO = Species::local(SpId::H2CO),
   H2O2 = Species::local(SpId::H2O2),
-  Op = Species::local(SpId::Op),        // O+
-  O2p = Species::local(SpId::O2p),      // O2+
-  OHp = Species::local(SpId::OHp),      // OH+
-  COp = Species::local(SpId::COp),      // CO+
-  H2Op = Species::local(SpId::H2Op),    // H2O+
-  HCOp = Species::local(SpId::HCOp),    // HCO+
-  O2Hp = Species::local(SpId::O2Hp),    // O2H+
-  H3Op = Species::local(SpId::H3Op),    // H3O+
-  H2COp = Species::local(SpId::H2COp),  // H2CO+
-  HOCOp = Species::local(SpId::HOCOp),  // HOCO+
+  Op = Species::local(SpId::Op),          // O+
+  O2p = Species::local(SpId::O2p),        // O2+
+  OHp = Species::local(SpId::OHp),        // OH+
+  COp = Species::local(SpId::COp),        // CO+
+  H2Op = Species::local(SpId::H2Op),      // H2O+
+  HCOp = Species::local(SpId::HCOp),      // HCO+
+  O2Hp = Species::local(SpId::O2Hp),      // O2H+
+  H3Op = Species::local(SpId::H3Op),      // H3O+
+  H2COp = Species::local(SpId::H2COp),    // H2CO+
+  HOCOp = Species::local(SpId::HOCOp),    // HOCO+
   H2COHp = Species::local(SpId::H2COHp),  // H2COH+
   // Li species
   Li = Species::local(SpId::Li),
@@ -212,38 +213,38 @@ enum Sp : int {
   Grm = Species::local(SpId::Grm),    // grain-
   Gr2m = Species::local(SpId::Gr2m),  // grain2-
   // Ice mantle / grain surface species (physisorbed/chemisorbed)
-  H_p = Species::local(SpId::H_p),    // H  physisorbed on grain
-  H_c = Species::local(SpId::H_c),    // H  chemisorbed on grain
-  H2_p = Species::local(SpId::H2_p),  // H2 physisorbed on grain
-  D_p = Species::local(SpId::D_p),    // D  physisorbed
-  D_c = Species::local(SpId::D_c),    // D  chemisorbed
-  HD_p = Species::local(SpId::HD_p),  // HD physisorbed
-  O_p = Species::local(SpId::O_p),    // O  on grain
-  O2_p = Species::local(SpId::O2_p),  // O2 on grain
-  OH_p = Species::local(SpId::OH_p),  // OH on grain
-  CO_p = Species::local(SpId::CO_p),  // CO on grain
-  CO2_p = Species::local(SpId::CO2_p),  // CO2 on grain
-  H2O_p = Species::local(SpId::H2O_p),  // H2O on grain  ← JH2O source
+  H_p = Species::local(SpId::H_p),        // H  physisorbed on grain
+  H_c = Species::local(SpId::H_c),        // H  chemisorbed on grain
+  H2_p = Species::local(SpId::H2_p),      // H2 physisorbed on grain
+  D_p = Species::local(SpId::D_p),        // D  physisorbed
+  D_c = Species::local(SpId::D_c),        // D  chemisorbed
+  HD_p = Species::local(SpId::HD_p),      // HD physisorbed
+  O_p = Species::local(SpId::O_p),        // O  on grain
+  O2_p = Species::local(SpId::O2_p),      // O2 on grain
+  OH_p = Species::local(SpId::OH_p),      // OH on grain
+  CO_p = Species::local(SpId::CO_p),      // CO on grain
+  CO2_p = Species::local(SpId::CO2_p),    // CO2 on grain
+  H2O_p = Species::local(SpId::H2O_p),    // H2O on grain  ← JH2O source
   HO2_p = Species::local(SpId::HO2_p),    // HO2 on grain
   H2O2_p = Species::local(SpId::H2O2_p),  // H2O2 on grain
   HCO_p = Species::local(SpId::HCO_p),    // HCO on grain
   H2CO_p = Species::local(SpId::H2CO_p),  // H2CO on grain
-  C_p = Species::local(SpId::C_p),    // C  on grain
-  CH_p = Species::local(SpId::CH_p),  // CH on grain
-  CH2_p = Species::local(SpId::CH2_p),  // CH2 on grain
-  CH3_p = Species::local(SpId::CH3_p),  // CH3 on grain
-  CH4_p = Species::local(SpId::CH4_p),  // CH4 on grain
+  C_p = Species::local(SpId::C_p),        // C  on grain
+  CH_p = Species::local(SpId::CH_p),      // CH on grain
+  CH2_p = Species::local(SpId::CH2_p),    // CH2 on grain
+  CH3_p = Species::local(SpId::CH3_p),    // CH3 on grain
+  CH4_p = Species::local(SpId::CH4_p),    // CH4 on grain
 };
 
 // Layout lock: the derived indices must reproduce the historical 89-species
 // metal_grain layout used by the reaction tables and grain kernels.
 static_assert(N_sp == 89, "metal_grain must carry 89 species");
-static_assert(H == 0 && H2 == 1 && e == 2 && Dm == 15 && C == 16 && O == 29 &&
-                  H2COHp == 49 && Li == 50 && Lippp == 56 && K == 57 &&
-                  Mgp == 62 && Gr == 63 && Gr2m == 67 && H_p == 68 &&
-                  H_c == 69 && H2_p == 70 && D_c == 72 && H2O_p == 79 &&
-                  CH4_p == 88,
-              "metal_grain Sp indices must match the historical catalog layout");
+static_assert(
+    H == 0 && H2 == 1 && e == 2 && Dm == 15 && C == 16 && O == 29 &&
+        H2COHp == 49 && Li == 50 && Lippp == 56 && K == 57 && Mgp == 62 &&
+        Gr == 63 && Gr2m == 67 && H_p == 68 && H_c == 69 && H2_p == 70 &&
+        D_c == 72 && H2O_p == 79 && CH4_p == 88,
+    "metal_grain Sp indices must match the historical catalog layout");
 // crit mapping (C++ 0-based):
 //   JH2  = y[H2_p  = 70]
 //   JH2O = y[H2O_p = 79]

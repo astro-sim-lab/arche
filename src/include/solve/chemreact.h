@@ -18,12 +18,12 @@
 #include <cstring>
 #include <utility>
 
+#include "cooling/cooling.h"  // c_H2
 #include "core/newton.h"  // gaussj_solve, newton_solve, NewtonOpts, LinSolve
-#include "cooling/cooling.h"              // c_H2
 #include "kinetics/partition_function.h"  // PfProvider, pf_eval, detail primitives
-#include "models/rate_kernel.h"           // compute_base_rates, compute_rates
-#include "kinetics/topology.h"
 #include "kinetics/reaction_index.h"
+#include "kinetics/topology.h"
+#include "models/rate_kernel.h"  // compute_base_rates, compute_rates
 
 namespace arche {
 
@@ -81,7 +81,8 @@ inline void compute_chemistry_cooling(
   // carry He+ provide dyHep (has_he_ion), models that carry He++ provide dyHepp
   // (has_he_pp); a model without them leaves the term zero and never names
   // Sp::Hep / Sp::Hepp.  The additive energy sum below is left intact so the
-  // full models stay bit-for-bit (both flags true ⇒ same assignments, in order).
+  // full models stay bit-for-bit (both flags true ⇒ same assignments, in
+  // order).
   double dyHep = 0.0;
   double dyHepp = 0.0;
   if constexpr (Model::cooling::has_he_ion) {
@@ -154,18 +155,19 @@ inline void compute_chemistry_cooling(
       // channels, so the sum (ch1 + ch2) stays byte-identical.
       double h2_cr_loss = k_rxn[Hp::H2_CR_ch1];
       if constexpr (Hp::H2_CR_ch2 >= 0) h2_cr_loss += k_rxn[Hp::H2_CR_ch2];
-      dyHp = dy[Sp::Hp] +
-             (k_rxn[cidx::Hp_rec_caseB] * y[Sp::Hp] * y[Sp::e] * nH -
-              (k_rxn[Hp::H_CR] + k_rxn[Hp::H_CRph]) * y[Sp::H] -
-              h2_cr_loss * y[Sp::H2]) *
-                 dt;
+      dyHp =
+          dy[Sp::Hp] + (k_rxn[cidx::Hp_rec_caseB] * y[Sp::Hp] * y[Sp::e] * nH -
+                        (k_rxn[Hp::H_CR] + k_rxn[Hp::H_CRph]) * y[Sp::H] -
+                        h2_cr_loss * y[Sp::H2]) *
+                           dt;
     } else {
       dyHp = dy[Sp::Hp] +
              (k_rxn[cidx::Hp_rec_caseB] * y[Sp::Hp] * y[Sp::e] * nH) * dt;
     }
     // He+ recombination minus CR losses — only for models carrying He ions; the
-    // CR-producer loss is composable (a He+-but-CR-free model omits it, mirroring
-    // the dyHp split above).  Full models keep both terms, byte-identical.
+    // CR-producer loss is composable (a He+-but-CR-free model omits it,
+    // mirroring the dyHp split above).  Full models keep both terms,
+    // byte-identical.
     if constexpr (Model::cooling::has_he_ion) {
       if constexpr (Model::cooling::has_cr_loss) {
         using Hep = typename Model::cooling::Hep_producers;
