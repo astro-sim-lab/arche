@@ -11,6 +11,8 @@
 #     --common-fret-table    FILE    2-col step-function table: nH[cm^-3] f_ret
 #     --common-ff-gamma              gamma-dependent collapse factor (Higuchi+2018 Eq.5-7)
 #     --common-jlw21         VALUE   Lyman-Werner intensity J_21 [10^-21 erg/s/cm^2/Hz/sr]
+#     --common-zeta-x        VALUE   X-ray HI photoionization rate zeta_X [s^-1]  (requires -DARCHE_XRAY=ON)
+#     --common-ex-ev         VALUE   X-ray photon energy E_X [eV]  (default: 300; requires -DARCHE_XRAY=ON)
 #     --common-redshift      VALUE   cosmological redshift z (T_rad = 2.725 * (1+z) [K])
 #     --common-tk0           VALUE   initial gas temperature [K]
 #     --common-ye0           VALUE   initial electron / H+ fraction
@@ -25,7 +27,7 @@
 #     --common-n-init-steps  VALUE   number of initial short-timestep steps (>=0)
 #     --common-xnh-stop      VALUE   stop threshold for nH [cm^-3] (>0)
 #     --common-cr-col-dens   VALUE   CR attenuation column density [g cm^-2] (>0)
-#     --common-data-dir      DIR     reaction data directory for both runs
+#     --common-chem-table      DIR     reaction data directory for both runs
 #   Per-network override:
 #     Replace `common` with `prim` or `metal` to override one side only.
 #     Example: --common-zeta0 1e-17 --metal-zeta0 1e-16
@@ -37,6 +39,10 @@
 #   --out-dir    DIR          root directory for HDF5 output (default: results/h5)
 #   --save-dir   DIR          root directory for figures (default: results/fig)
 #   --config     FILE         parameter file path (default: params/default.conf; required unless --no-config)
+#   --minimal                run primordial with minimal network
+#                            (uses arche_collapse_prim_minimal)
+#   --metal-minimal           run metal_grain with minimal network
+#                            (uses arche_collapse_metal_minimal)
 #   --no-config               disable parameter file loading
 #   --no-build                skip cmake/build step (use existing binaries)
 #   --no-prim                 skip primordial_collapse
@@ -59,8 +65,28 @@
 #   bash run_collapse.sh --prim-zeta0 1e-17 --prim-fret-table data/fret_table/fret_step_sample.dat \
 #                              --metal-zeta0 1e-17 --metal-z-metal 1e-3
 #   bash run_collapse.sh --prim-zeta0 1e-17 --no-plot   # simulate + resample only
+#   bash run_collapse.sh --no-metal --prim-zeta0 0 --prim-redshift 20 \
+#                              --fig-combo --no-resample --save-dir results/quickstart/case_1 \
+#                              --out-dir results/quickstart/case_1
+#   bash run_collapse.sh --no-metal --minimal --prim-zeta0 0 --prim-redshift 20 \
+#                              --fig-combo --no-resample --save-dir results/quickstart/case_1A \
+#                              --out-dir results/quickstart/case_1A
+#   bash run_collapse.sh --no-prim --metal-minimal --metal-zeta0 1e-17 --metal-z-metal 1e-3
 
 set -euo pipefail
+
+# bash < 4.0 (macOS default) does not have mapfile; provide a polyfill
+if [[ "${BASH_VERSINFO[0]}" -lt 4 ]]; then
+    mapfile() {
+        local _arr _line; _arr="MAPFILE"
+        while [[ $# -gt 0 ]]; do
+            case "$1" in -t) shift ;; *) _arr="$1"; shift ;; esac
+        done
+        eval "${_arr}=()"
+        while IFS= read -r _line; do eval "${_arr}+=(\"\${_line}\")"; done
+    }
+fi
+
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
@@ -76,6 +102,10 @@ ENV_METAL_FRET_TABLE="${METAL_FRET_TABLE-}"
 ENV_METAL_FF_GAMMA="${METAL_FF_GAMMA-}"
 ENV_PRIM_JLW21="${PRIM_JLW21-}"
 ENV_METAL_JLW21="${METAL_JLW21-}"
+ENV_PRIM_ZETA_X="${PRIM_ZETA_X-}"
+ENV_METAL_ZETA_X="${METAL_ZETA_X-}"
+ENV_PRIM_E_X_EV="${PRIM_E_X_EV-}"
+ENV_METAL_E_X_EV="${METAL_E_X_EV-}"
 ENV_PRIM_REDSHIFT="${PRIM_REDSHIFT-}"
 ENV_METAL_REDSHIFT="${METAL_REDSHIFT-}"
 ENV_PRIM_TK0="${PRIM_TK0-}"
@@ -96,7 +126,7 @@ ENV_PRIM_DT_FACTOR_INIT="${PRIM_DT_FACTOR_INIT-}"
 ENV_PRIM_N_INIT_STEPS="${PRIM_N_INIT_STEPS-}"
 ENV_PRIM_XNH_STOP="${PRIM_XNH_STOP-}"
 ENV_PRIM_CR_ATTEN_COL_DENS="${PRIM_CR_ATTEN_COL_DENS-}"
-ENV_PRIM_DATA_DIR="${PRIM_DATA_DIR-}"
+ENV_PRIM_CHEM_TABLE="${PRIM_CHEM_TABLE-}"
 ENV_METAL_XNH0="${METAL_XNH0-}"
 ENV_METAL_OUTPUT_STRIDE="${METAL_OUTPUT_STRIDE-}"
 ENV_METAL_MAX_ITER="${METAL_MAX_ITER-}"
@@ -113,7 +143,7 @@ ENV_METAL_T_CR_DES="${METAL_T_CR_DES-}"
 ENV_METAL_C_GAS_FRAC="${METAL_C_GAS_FRAC-}"
 ENV_METAL_O_GAS_FRAC="${METAL_O_GAS_FRAC-}"
 ENV_METAL_MG_GAS_FRAC="${METAL_MG_GAS_FRAC-}"
-ENV_METAL_DATA_DIR="${METAL_DATA_DIR-}"
+ENV_METAL_CHEM_TABLE="${METAL_CHEM_TABLE-}"
 ENV_BUILD_DIR="${BUILD_DIR-}"
 ENV_OUT_DIR="${OUT_DIR-}"
 ENV_SAVE_DIR="${SAVE_DIR-}"
@@ -141,7 +171,7 @@ COMMON_DT_FACTOR_INIT=""
 COMMON_N_INIT_STEPS=""
 COMMON_XNH_STOP=""
 COMMON_CR_ATTEN_COL_DENS=""
-COMMON_DATA_DIR=""
+COMMON_CHEM_TABLE=""
 PRIM_FF_RET=""
 PRIM_FRET_TABLE=""
 PRIM_FF_GAMMA=""
@@ -150,6 +180,12 @@ METAL_FRET_TABLE=""
 METAL_FF_GAMMA=""
 PRIM_JLW21=""
 METAL_JLW21=""
+PRIM_ZETA_X=""
+METAL_ZETA_X=""
+PRIM_E_X_EV=""
+METAL_E_X_EV=""
+COMMON_ZETA_X=""
+COMMON_E_X_EV=""
 PRIM_REDSHIFT=""
 METAL_REDSHIFT=""
 PRIM_TK0=""
@@ -170,7 +206,7 @@ PRIM_DT_FACTOR_INIT=""
 PRIM_N_INIT_STEPS=""
 PRIM_XNH_STOP=""
 PRIM_CR_ATTEN_COL_DENS=""
-PRIM_DATA_DIR=""
+PRIM_CHEM_TABLE=""
 METAL_XNH0=""
 METAL_OUTPUT_STRIDE=""
 METAL_MAX_ITER=""
@@ -187,7 +223,7 @@ METAL_T_CR_DES=""
 METAL_C_GAS_FRAC=""
 METAL_O_GAS_FRAC=""
 METAL_MG_GAS_FRAC=""
-METAL_DATA_DIR=""
+METAL_CHEM_TABLE=""
 BUILD_DIR=""
 OUT_DIR=""
 SAVE_DIR=""
@@ -201,6 +237,8 @@ DO_METAL=1
 DO_PLOT=1
 DO_FIG_COMBO=0
 DO_RESAMPLE=1
+PRIM_MINIMAL=0
+METAL_MINIMAL=0
 
 # ── Argument parsing ─────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -210,6 +248,8 @@ while [[ $# -gt 0 ]]; do
         --common-fret-table) COMMON_FRET_TABLE="$2"; shift 2 ;;
         --common-ff-gamma) COMMON_FF_GAMMA="1"; shift ;;
         --common-jlw21)  COMMON_JLW21="$2";  shift 2 ;;
+        --common-zeta-x) COMMON_ZETA_X="$2"; shift 2 ;;
+        --common-ex-ev)  COMMON_E_X_EV="$2"; shift 2 ;;
         --common-redshift) COMMON_REDSHIFT="$2"; shift 2 ;;
         --common-tk0)    COMMON_TK0="$2";    shift 2 ;;
         --common-ye0)    COMMON_YE0="$2";    shift 2 ;;
@@ -224,7 +264,7 @@ while [[ $# -gt 0 ]]; do
         --common-n-init-steps) COMMON_N_INIT_STEPS="$2"; shift 2 ;;
         --common-xnh-stop) COMMON_XNH_STOP="$2"; shift 2 ;;
         --common-cr-col-dens) COMMON_CR_ATTEN_COL_DENS="$2"; shift 2 ;;
-        --common-data-dir) COMMON_DATA_DIR="$2"; shift 2 ;;
+        --common-chem-table) COMMON_CHEM_TABLE="$2"; shift 2 ;;
         --prim-zeta0)    PRIM_ZETA0="$2";    shift 2 ;;
         --metal-zeta0)   METAL_ZETA0="$2";   shift 2 ;;
         --metal-z-metal) METAL_Z_METAL="$2"; shift 2 ;;
@@ -236,6 +276,10 @@ while [[ $# -gt 0 ]]; do
         --metal-ff-gamma)   METAL_FF_GAMMA="1";     shift ;;
         --prim-jlw21)       PRIM_JLW21="$2";       shift 2 ;;
         --metal-jlw21)      METAL_JLW21="$2";      shift 2 ;;
+        --prim-zeta-x)      PRIM_ZETA_X="$2";      shift 2 ;;
+        --metal-zeta-x)     METAL_ZETA_X="$2";     shift 2 ;;
+        --prim-ex-ev)       PRIM_E_X_EV="$2";      shift 2 ;;
+        --metal-ex-ev)      METAL_E_X_EV="$2";     shift 2 ;;
         --prim-redshift)    PRIM_REDSHIFT="$2";    shift 2 ;;
         --metal-redshift)   METAL_REDSHIFT="$2";   shift 2 ;;
         --prim-tk0)         PRIM_TK0="$2";         shift 2 ;;
@@ -251,7 +295,7 @@ while [[ $# -gt 0 ]]; do
         --prim-n-init-steps) PRIM_N_INIT_STEPS="$2"; shift 2 ;;
         --prim-xnh-stop)    PRIM_XNH_STOP="$2"; shift 2 ;;
         --prim-cr-col-dens) PRIM_CR_ATTEN_COL_DENS="$2"; shift 2 ;;
-        --prim-data-dir)    PRIM_DATA_DIR="$2";    shift 2 ;;
+        --prim-chem-table)    PRIM_CHEM_TABLE="$2";    shift 2 ;;
         --metal-tk0)        METAL_TK0="$2";        shift 2 ;;
         --metal-ye0)        METAL_YE0="$2";        shift 2 ;;
         --metal-yh2)        METAL_YH2="$2";        shift 2 ;;
@@ -273,11 +317,13 @@ while [[ $# -gt 0 ]]; do
         --metal-c-gas-frac) METAL_C_GAS_FRAC="$2"; shift 2 ;;
         --metal-o-gas-frac) METAL_O_GAS_FRAC="$2"; shift 2 ;;
         --metal-mg-gas-frac) METAL_MG_GAS_FRAC="$2"; shift 2 ;;
-        --metal-data-dir)   METAL_DATA_DIR="$2";   shift 2 ;;
+        --metal-chem-table)   METAL_CHEM_TABLE="$2";   shift 2 ;;
         --build-dir)  BUILD_DIR="$2"; shift 2 ;;
         --out-dir)    OUT_DIR="$2";   shift 2 ;;
         --save-dir)   SAVE_DIR="$2";  shift 2 ;;
         --config)     CONFIG_PATH="$2"; USE_CONFIG=1; shift 2 ;;
+        --minimal)    PRIM_MINIMAL=1; shift ;;
+        --metal-minimal) METAL_MINIMAL=1; shift ;;
         --no-config)  USE_CONFIG=0; shift ;;
         --no-build)    DO_BUILD=0;     shift ;;
         --no-prim)     DO_PRIM=0;      shift ;;
@@ -315,6 +361,10 @@ mapfile -t _pair < <(apply_common_cli "$COMMON_FF_GAMMA" "$PRIM_FF_GAMMA" "$META
 PRIM_FF_GAMMA="${_pair[0]}"; METAL_FF_GAMMA="${_pair[1]}"
 mapfile -t _pair < <(apply_common_cli "$COMMON_JLW21" "$PRIM_JLW21" "$METAL_JLW21")
 PRIM_JLW21="${_pair[0]}"; METAL_JLW21="${_pair[1]}"
+mapfile -t _pair < <(apply_common_cli "$COMMON_ZETA_X" "$PRIM_ZETA_X" "$METAL_ZETA_X")
+PRIM_ZETA_X="${_pair[0]}"; METAL_ZETA_X="${_pair[1]}"
+mapfile -t _pair < <(apply_common_cli "$COMMON_E_X_EV" "$PRIM_E_X_EV" "$METAL_E_X_EV")
+PRIM_E_X_EV="${_pair[0]}"; METAL_E_X_EV="${_pair[1]}"
 mapfile -t _pair < <(apply_common_cli "$COMMON_REDSHIFT" "$PRIM_REDSHIFT" "$METAL_REDSHIFT")
 PRIM_REDSHIFT="${_pair[0]}"; METAL_REDSHIFT="${_pair[1]}"
 mapfile -t _pair < <(apply_common_cli "$COMMON_TK0" "$PRIM_TK0" "$METAL_TK0")
@@ -343,15 +393,15 @@ mapfile -t _pair < <(apply_common_cli "$COMMON_XNH_STOP" "$PRIM_XNH_STOP" "$META
 PRIM_XNH_STOP="${_pair[0]}"; METAL_XNH_STOP="${_pair[1]}"
 mapfile -t _pair < <(apply_common_cli "$COMMON_CR_ATTEN_COL_DENS" "$PRIM_CR_ATTEN_COL_DENS" "$METAL_CR_ATTEN_COL_DENS")
 PRIM_CR_ATTEN_COL_DENS="${_pair[0]}"; METAL_CR_ATTEN_COL_DENS="${_pair[1]}"
-mapfile -t _pair < <(apply_common_cli "$COMMON_DATA_DIR" "$PRIM_DATA_DIR" "$METAL_DATA_DIR")
-PRIM_DATA_DIR="${_pair[0]}"; METAL_DATA_DIR="${_pair[1]}"
+mapfile -t _pair < <(apply_common_cli "$COMMON_CHEM_TABLE" "$PRIM_CHEM_TABLE" "$METAL_CHEM_TABLE")
+PRIM_CHEM_TABLE="${_pair[0]}"; METAL_CHEM_TABLE="${_pair[1]}"
 
 # ── Config loading and precedence merge ──────────────────────────────────────
 declare -A CFG
 
 is_allowed_config_key() {
     case "$1" in
-        PRIM_ZETA0|METAL_ZETA0|METAL_Z_METAL|PRIM_FF_RET|PRIM_FRET_TABLE|PRIM_FF_GAMMA|METAL_FF_RET|METAL_FRET_TABLE|METAL_FF_GAMMA|PRIM_JLW21|METAL_JLW21|PRIM_REDSHIFT|METAL_REDSHIFT|PRIM_TK0|PRIM_YE0|PRIM_YH2|PRIM_YHD|PRIM_ABUNDANCE_SET|METAL_TK0|METAL_YE0|METAL_YH2|METAL_YHD|METAL_ABUNDANCE_SET|PRIM_XNH0|PRIM_OUTPUT_STRIDE|PRIM_MAX_ITER|PRIM_DT_FACTOR|PRIM_DT_FACTOR_INIT|PRIM_N_INIT_STEPS|PRIM_XNH_STOP|PRIM_CR_ATTEN_COL_DENS|PRIM_DATA_DIR|METAL_XNH0|METAL_OUTPUT_STRIDE|METAL_MAX_ITER|METAL_DT_FACTOR|METAL_DT_FACTOR_INIT|METAL_N_INIT_STEPS|METAL_XNH_STOP|METAL_CR_ATTEN_COL_DENS|METAL_CR_ATTEN_SECOND_FRAC|METAL_CR_METAL_BKGND|METAL_SRA_RATE|METAL_LRA_RATE|METAL_T_CR_DES|METAL_C_GAS_FRAC|METAL_O_GAS_FRAC|METAL_MG_GAS_FRAC|METAL_DATA_DIR|BUILD_DIR|OUT_DIR|SAVE_DIR|COMMON_ZETA0|COMMON_FF_RET|COMMON_FRET_TABLE|COMMON_FF_GAMMA|COMMON_JLW21|COMMON_REDSHIFT|COMMON_TK0|COMMON_YE0|COMMON_YH2|COMMON_YHD|COMMON_ABUNDANCE_SET|COMMON_XNH0|COMMON_OUTPUT_STRIDE|COMMON_MAX_ITER|COMMON_DT_FACTOR|COMMON_DT_FACTOR_INIT|COMMON_N_INIT_STEPS|COMMON_XNH_STOP|COMMON_CR_ATTEN_COL_DENS|COMMON_DATA_DIR)
+        PRIM_ZETA0|METAL_ZETA0|METAL_Z_METAL|PRIM_FF_RET|PRIM_FRET_TABLE|PRIM_FF_GAMMA|METAL_FF_RET|METAL_FRET_TABLE|METAL_FF_GAMMA|PRIM_JLW21|METAL_JLW21|PRIM_ZETA_X|METAL_ZETA_X|PRIM_E_X_EV|METAL_E_X_EV|PRIM_REDSHIFT|METAL_REDSHIFT|PRIM_TK0|PRIM_YE0|PRIM_YH2|PRIM_YHD|PRIM_ABUNDANCE_SET|METAL_TK0|METAL_YE0|METAL_YH2|METAL_YHD|METAL_ABUNDANCE_SET|PRIM_XNH0|PRIM_OUTPUT_STRIDE|PRIM_MAX_ITER|PRIM_DT_FACTOR|PRIM_DT_FACTOR_INIT|PRIM_N_INIT_STEPS|PRIM_XNH_STOP|PRIM_CR_ATTEN_COL_DENS|PRIM_CHEM_TABLE|METAL_XNH0|METAL_OUTPUT_STRIDE|METAL_MAX_ITER|METAL_DT_FACTOR|METAL_DT_FACTOR_INIT|METAL_N_INIT_STEPS|METAL_XNH_STOP|METAL_CR_ATTEN_COL_DENS|METAL_CR_ATTEN_SECOND_FRAC|METAL_CR_METAL_BKGND|METAL_SRA_RATE|METAL_LRA_RATE|METAL_T_CR_DES|METAL_C_GAS_FRAC|METAL_O_GAS_FRAC|METAL_MG_GAS_FRAC|METAL_CHEM_TABLE|BUILD_DIR|OUT_DIR|SAVE_DIR|COMMON_ZETA0|COMMON_FF_RET|COMMON_FRET_TABLE|COMMON_FF_GAMMA|COMMON_JLW21|COMMON_ZETA_X|COMMON_E_X_EV|COMMON_REDSHIFT|COMMON_TK0|COMMON_YE0|COMMON_YH2|COMMON_YHD|COMMON_ABUNDANCE_SET|COMMON_XNH0|COMMON_OUTPUT_STRIDE|COMMON_MAX_ITER|COMMON_DT_FACTOR|COMMON_DT_FACTOR_INIT|COMMON_N_INIT_STEPS|COMMON_XNH_STOP|COMMON_CR_ATTEN_COL_DENS|COMMON_CHEM_TABLE)
             return 0 ;;
         *)
             return 1 ;;
@@ -442,6 +492,10 @@ METAL_FRET_TABLE="$(pick_value "$METAL_FRET_TABLE" "$ENV_METAL_FRET_TABLE" "$(cf
 METAL_FF_GAMMA="$(pick_value "$METAL_FF_GAMMA" "$ENV_METAL_FF_GAMMA" "$(cfg_or_common METAL_FF_GAMMA COMMON_FF_GAMMA)")"
 PRIM_JLW21="$(pick_value "$PRIM_JLW21" "$ENV_PRIM_JLW21" "$(cfg_or_common PRIM_JLW21 COMMON_JLW21)")"
 METAL_JLW21="$(pick_value "$METAL_JLW21" "$ENV_METAL_JLW21" "$(cfg_or_common METAL_JLW21 COMMON_JLW21)")"
+PRIM_ZETA_X="$(pick_value "$PRIM_ZETA_X" "$ENV_PRIM_ZETA_X" "$(cfg_or_common PRIM_ZETA_X COMMON_ZETA_X)")"
+METAL_ZETA_X="$(pick_value "$METAL_ZETA_X" "$ENV_METAL_ZETA_X" "$(cfg_or_common METAL_ZETA_X COMMON_ZETA_X)")"
+PRIM_E_X_EV="$(pick_value "$PRIM_E_X_EV" "$ENV_PRIM_E_X_EV" "$(cfg_or_common PRIM_E_X_EV COMMON_E_X_EV)")"
+METAL_E_X_EV="$(pick_value "$METAL_E_X_EV" "$ENV_METAL_E_X_EV" "$(cfg_or_common METAL_E_X_EV COMMON_E_X_EV)")"
 PRIM_REDSHIFT="$(pick_value "$PRIM_REDSHIFT" "$ENV_PRIM_REDSHIFT" "$(cfg_or_common PRIM_REDSHIFT COMMON_REDSHIFT)")"
 METAL_REDSHIFT="$(pick_value "$METAL_REDSHIFT" "$ENV_METAL_REDSHIFT" "$(cfg_or_common METAL_REDSHIFT COMMON_REDSHIFT)")"
 PRIM_TK0="$(pick_value "$PRIM_TK0" "$ENV_PRIM_TK0" "$(cfg_or_common PRIM_TK0 COMMON_TK0)")"
@@ -462,7 +516,7 @@ PRIM_DT_FACTOR_INIT="$(pick_value "$PRIM_DT_FACTOR_INIT" "$ENV_PRIM_DT_FACTOR_IN
 PRIM_N_INIT_STEPS="$(pick_value "$PRIM_N_INIT_STEPS" "$ENV_PRIM_N_INIT_STEPS" "$(cfg_or_common PRIM_N_INIT_STEPS COMMON_N_INIT_STEPS)")"
 PRIM_XNH_STOP="$(pick_value "$PRIM_XNH_STOP" "$ENV_PRIM_XNH_STOP" "$(cfg_or_common PRIM_XNH_STOP COMMON_XNH_STOP)")"
 PRIM_CR_ATTEN_COL_DENS="$(pick_value "$PRIM_CR_ATTEN_COL_DENS" "$ENV_PRIM_CR_ATTEN_COL_DENS" "$(cfg_or_common PRIM_CR_ATTEN_COL_DENS COMMON_CR_ATTEN_COL_DENS)")"
-PRIM_DATA_DIR="$(pick_value "$PRIM_DATA_DIR" "$ENV_PRIM_DATA_DIR" "$(cfg_or_common PRIM_DATA_DIR COMMON_DATA_DIR)")"
+PRIM_CHEM_TABLE="$(pick_value "$PRIM_CHEM_TABLE" "$ENV_PRIM_CHEM_TABLE" "$(cfg_or_common PRIM_CHEM_TABLE COMMON_CHEM_TABLE)")"
 METAL_XNH0="$(pick_value "$METAL_XNH0" "$ENV_METAL_XNH0" "$(cfg_or_common METAL_XNH0 COMMON_XNH0)")"
 METAL_OUTPUT_STRIDE="$(pick_value "$METAL_OUTPUT_STRIDE" "$ENV_METAL_OUTPUT_STRIDE" "$(cfg_or_common METAL_OUTPUT_STRIDE COMMON_OUTPUT_STRIDE)")"
 METAL_MAX_ITER="$(pick_value "$METAL_MAX_ITER" "$ENV_METAL_MAX_ITER" "$(cfg_or_common METAL_MAX_ITER COMMON_MAX_ITER)")"
@@ -479,7 +533,7 @@ METAL_T_CR_DES="$(pick_value "$METAL_T_CR_DES" "$ENV_METAL_T_CR_DES" "${CFG[META
 METAL_C_GAS_FRAC="$(pick_value "$METAL_C_GAS_FRAC" "$ENV_METAL_C_GAS_FRAC" "${CFG[METAL_C_GAS_FRAC]-}")"
 METAL_O_GAS_FRAC="$(pick_value "$METAL_O_GAS_FRAC" "$ENV_METAL_O_GAS_FRAC" "${CFG[METAL_O_GAS_FRAC]-}")"
 METAL_MG_GAS_FRAC="$(pick_value "$METAL_MG_GAS_FRAC" "$ENV_METAL_MG_GAS_FRAC" "${CFG[METAL_MG_GAS_FRAC]-}")"
-METAL_DATA_DIR="$(pick_value "$METAL_DATA_DIR" "$ENV_METAL_DATA_DIR" "$(cfg_or_common METAL_DATA_DIR COMMON_DATA_DIR)")"
+METAL_CHEM_TABLE="$(pick_value "$METAL_CHEM_TABLE" "$ENV_METAL_CHEM_TABLE" "$(cfg_or_common METAL_CHEM_TABLE COMMON_CHEM_TABLE)")"
 BUILD_DIR="$(pick_value "$BUILD_DIR" "$ENV_BUILD_DIR" "${CFG[BUILD_DIR]-}")"
 OUT_DIR="$(pick_value "$OUT_DIR" "$ENV_OUT_DIR" "${CFG[OUT_DIR]-}")"
 SAVE_DIR="$(pick_value "$SAVE_DIR" "$ENV_SAVE_DIR" "${CFG[SAVE_DIR]-}")"
@@ -549,6 +603,8 @@ if [[ $DO_PRIM -eq 1 ]]; then
         [[ -n "$PRIM_FF_RET" ]] && validate_pos "--prim-ff-ret" "$PRIM_FF_RET"
     fi
     [[ -n "$PRIM_JLW21"    ]] && validate_nonneg "--prim-jlw21"    "$PRIM_JLW21"
+    [[ -n "$PRIM_ZETA_X"  ]] && validate_nonneg "--prim-zeta-x"   "$PRIM_ZETA_X"
+    [[ -n "$PRIM_E_X_EV"  ]] && validate_pos    "--prim-ex-ev"    "$PRIM_E_X_EV"
     [[ -n "$PRIM_REDSHIFT" ]] && validate_nonneg "--prim-redshift" "$PRIM_REDSHIFT"
     [[ -n "$PRIM_TK0"      ]] && validate_pos    "--prim-tk0"      "$PRIM_TK0"
     [[ -n "$PRIM_YE0"      ]] && validate_nonneg "--prim-ye0"      "$PRIM_YE0"
@@ -586,6 +642,8 @@ if [[ $DO_METAL -eq 1 ]]; then
         [[ -n "$METAL_FF_RET" ]] && validate_pos "--metal-ff-ret" "$METAL_FF_RET"
     fi
     [[ -n "$METAL_JLW21"    ]] && validate_nonneg "--metal-jlw21"    "$METAL_JLW21"
+    [[ -n "$METAL_ZETA_X"  ]] && validate_nonneg "--metal-zeta-x"   "$METAL_ZETA_X"
+    [[ -n "$METAL_E_X_EV"  ]] && validate_pos    "--metal-ex-ev"    "$METAL_E_X_EV"
     [[ -n "$METAL_REDSHIFT" ]] && validate_nonneg "--metal-redshift" "$METAL_REDSHIFT"
     [[ -n "$METAL_TK0"      ]] && validate_pos    "--metal-tk0"      "$METAL_TK0"
     [[ -n "$METAL_YE0"      ]] && validate_nonneg "--metal-ye0"      "$METAL_YE0"
@@ -610,6 +668,13 @@ if [[ $DO_METAL -eq 1 ]]; then
     awk -v c="${METAL_C_GAS_FRAC:-0}" -v o="${METAL_O_GAS_FRAC:-0}" -v m="${METAL_MG_GAS_FRAC:-0}" 'BEGIN{
         if (c>1 || o>1 || m>1) { exit 1 }
     }' || { echo "ERROR: gas fractions must be <= 1" >&2; exit 1; }
+fi
+
+if [[ $PRIM_MINIMAL -eq 1 && $DO_PRIM -eq 0 ]]; then
+    echo "WARNING: --minimal is ignored because primordial run is disabled (--no-prim)" >&2
+fi
+if [[ $METAL_MINIMAL -eq 1 && $DO_METAL -eq 0 ]]; then
+    echo "WARNING: --metal-minimal is ignored because metal_grain run is disabled (--no-metal)" >&2
 fi
 
 # ── Tag generation ───────────────────────────────────────────────────────────
@@ -641,6 +706,11 @@ else
 fi
 if [[ $DO_PRIM -eq 1 ]]; then
     echo "  primordial : zeta0=${PRIM_ZETA0} s^-1"
+    if [[ $PRIM_MINIMAL -eq 1 ]]; then
+        echo "               network=minimal (arche_collapse_prim_minimal)"
+    else
+        echo "               network=full (prim_collapse)"
+    fi
     if [[ -n "$PRIM_FF_GAMMA" ]]; then
         echo "               f_ret=gamma (Higuchi+2018 Eq.5-7)"
     elif [[ -n "$PRIM_FRET_TABLE" ]]; then
@@ -652,6 +722,7 @@ if [[ $DO_PRIM -eq 1 ]]; then
     fi
     [[ -n "$PRIM_JLW21"    ]] && echo "               J_LW21=${PRIM_JLW21} J_21" \
                               || echo "               J_LW21=0.0 (no LW field)"
+    [[ -n "$PRIM_ZETA_X"  ]] && echo "               zeta_X=${PRIM_ZETA_X} s^-1  E_X=${PRIM_E_X_EV:-300} eV  (ARCHE_XRAY)"
     [[ -n "$PRIM_REDSHIFT" ]] && echo "               redshift=${PRIM_REDSHIFT}" \
                               || echo "               redshift=0.0 (z=0)"
     [[ -n "$PRIM_TK0"      ]] && echo "               T_K0=${PRIM_TK0} K"    || echo "               T_K0=100.0 K (default)"
@@ -664,6 +735,11 @@ fi
 if [[ $DO_METAL -eq 1 ]]; then
     echo "  metal_grain: zeta0=${METAL_ZETA0} s^-1"
     echo "               Z_metal=${METAL_Z_METAL} Z☉"
+    if [[ $METAL_MINIMAL -eq 1 ]]; then
+        echo "               network=minimal (arche_collapse_metal_minimal)"
+    else
+        echo "               network=full (metal_collapse)"
+    fi
     if [[ -n "$METAL_FF_GAMMA" ]]; then
         echo "               f_ret=gamma (Higuchi+2018 Eq.5-7)"
     elif [[ -n "$METAL_FRET_TABLE" ]]; then
@@ -675,6 +751,7 @@ if [[ $DO_METAL -eq 1 ]]; then
     fi
     [[ -n "$METAL_JLW21"    ]] && echo "               J_LW21=${METAL_JLW21} J_21" \
                                || echo "               J_LW21=0.0 (no LW field)"
+    [[ -n "$METAL_ZETA_X"  ]] && echo "               zeta_X=${METAL_ZETA_X} s^-1  E_X=${METAL_E_X_EV:-300} eV  (ARCHE_XRAY)"
     [[ -n "$METAL_REDSHIFT" ]] && echo "               redshift=${METAL_REDSHIFT}" \
                                || echo "               redshift=0.0 (z=0)"
     [[ -n "$METAL_TK0"      ]] && echo "               T_K0=${METAL_TK0} K"   || echo "               T_K0=100.0 K (default)"
@@ -699,7 +776,28 @@ if [[ $DO_BUILD -eq 1 ]]; then
     echo ">>> [1/5] Build"
     mkdir -p "$BUILD_DIR"
     cmake -S . -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=17
-    cmake --build "$BUILD_DIR" --target prim_collapse metal_collapse -j"$(nproc)"
+
+    BUILD_TARGETS=()
+    if [[ $DO_PRIM -eq 1 ]]; then
+        if [[ $PRIM_MINIMAL -eq 1 ]]; then
+            BUILD_TARGETS+=(arche_collapse_prim_minimal)
+        else
+            BUILD_TARGETS+=(prim_collapse)
+        fi
+    fi
+    if [[ $DO_METAL -eq 1 ]]; then
+        if [[ $METAL_MINIMAL -eq 1 ]]; then
+            BUILD_TARGETS+=(arche_collapse_metal_minimal)
+        else
+            BUILD_TARGETS+=(metal_collapse)
+        fi
+    fi
+
+    if [[ ${#BUILD_TARGETS[@]} -gt 0 ]]; then
+        cmake --build "$BUILD_DIR" --target "${BUILD_TARGETS[@]}" -j"$(nproc)"
+    else
+        echo "    no run targets selected; skipping app build"
+    fi
 else
     echo ">>> [1/5] Build skipped"
 fi
@@ -714,9 +812,16 @@ if [[ $DO_PRIM -eq 1 ]]; then
     echo ""
     echo ">>> [2/5] primordial_collapse  zeta0=${PRIM_ZETA0} s^-1"
     mkdir -p "$PRIM_OUT"
+
+    PRIM_APP="${BUILD_DIR}/src/apps/collapse_primordial/prim_collapse"
+    if [[ $PRIM_MINIMAL -eq 1 ]]; then
+        PRIM_APP="${BUILD_DIR}/src/apps/collapse_primordial/arche_collapse_prim_minimal"
+    fi
+
     PRIM_OUTDIR="$PRIM_OUT" PRIM_ZETA0="$PRIM_ZETA0" \
         PRIM_FF_RET="$PRIM_FF_RET" PRIM_FRET_TABLE="$PRIM_FRET_TABLE" PRIM_FF_GAMMA="$PRIM_FF_GAMMA" \
         PRIM_JLW21="$PRIM_JLW21" \
+        PRIM_ZETA_X="$PRIM_ZETA_X" PRIM_E_X_EV="$PRIM_E_X_EV" \
         PRIM_REDSHIFT="$PRIM_REDSHIFT" \
         PRIM_ABUNDANCE_SET="$PRIM_ABUNDANCE_SET" \
         PRIM_TK0="$PRIM_TK0" PRIM_YE0="$PRIM_YE0" \
@@ -725,8 +830,8 @@ if [[ $DO_PRIM -eq 1 ]]; then
         PRIM_DT_FACTOR="$PRIM_DT_FACTOR" PRIM_DT_FACTOR_INIT="$PRIM_DT_FACTOR_INIT" \
         PRIM_N_INIT_STEPS="$PRIM_N_INIT_STEPS" PRIM_XNH_STOP="$PRIM_XNH_STOP" \
         PRIM_CR_ATTEN_COL_DENS="$PRIM_CR_ATTEN_COL_DENS" \
-        PRIM_MAX_ITER="$PRIM_MAX_ITER" PRIM_DATA_DIR="$PRIM_DATA_DIR" \
-        "${BUILD_DIR}/src/apps/collapse_primordial/prim_collapse"
+        PRIM_MAX_ITER="$PRIM_MAX_ITER" PRIM_CHEM_TABLE="$PRIM_CHEM_TABLE" \
+        "$PRIM_APP"
     PRIM_TAG=$(make_tag "$PRIM_ZETA0")
     # fret tag: gamma mode → "-gamma"; table mode → "-step"; scalar → numeric (only when != 1.0)
     if [[ -n "$PRIM_FF_GAMMA" ]]; then
@@ -745,14 +850,33 @@ if [[ $DO_PRIM -eq 1 ]]; then
             PRIM_JLW_TAG=$(make_tag "$PRIM_JLW21")
         fi
     fi
+    PRIM_ZX_TAG=""
+    if [[ -n "$PRIM_ZETA_X" ]]; then
+        # append ZX tag only when zeta_X != 0.0
+        if awk -v v="$PRIM_ZETA_X" 'BEGIN { exit (v+0 == 0.0) ? 1 : 0 }'; then
+            PRIM_ZX_TAG=$(make_tag "$PRIM_ZETA_X")
+        fi
+    fi
     if [[ -n "$PRIM_REDSHIFT" ]]; then
         # append redshift tag only when z != 0.0
         if awk -v v="$PRIM_REDSHIFT" 'BEGIN { exit (v+0 == 0.0) ? 1 : 0 }'; then
             PRIM_ZRED_TAG=$(make_tag "$PRIM_REDSHIFT")
         fi
     fi
-    _prim_h5="${PRIM_OUT}/collapse_CR${PRIM_TAG}${PRIM_FRET_TAG:+_fret${PRIM_FRET_TAG}}${PRIM_JLW_TAG:+_JLW${PRIM_JLW_TAG}}${PRIM_ZRED_TAG:+_z${PRIM_ZRED_TAG}}.h5"
+    PRIM_MODEL_SUFFIX=""
+    [[ $PRIM_MINIMAL -eq 1 ]] && PRIM_MODEL_SUFFIX="_min"
+
+    _prim_h5="${PRIM_OUT}/collapse_CR${PRIM_TAG}${PRIM_MODEL_SUFFIX}${PRIM_FRET_TAG:+_fret${PRIM_FRET_TAG}}${PRIM_JLW_TAG:+_JLW${PRIM_JLW_TAG}}${PRIM_ZX_TAG:+_ZX${PRIM_ZX_TAG}}${PRIM_ZRED_TAG:+_z${PRIM_ZRED_TAG}}.h5"
     echo "    HDF5: ${_prim_h5}"
+
+    # analyze_collapse.py / resample_collapse.py currently look for the full
+    # filename stem (without _min). In minimal mode, provide a symlink alias so
+    # existing postprocess tools continue to work unchanged.
+    if [[ $PRIM_MINIMAL -eq 1 ]]; then
+        _prim_h5_alias="${PRIM_OUT}/collapse_CR${PRIM_TAG}${PRIM_FRET_TAG:+_fret${PRIM_FRET_TAG}}${PRIM_JLW_TAG:+_JLW${PRIM_JLW_TAG}}${PRIM_ZX_TAG:+_ZX${PRIM_ZX_TAG}}${PRIM_ZRED_TAG:+_z${PRIM_ZRED_TAG}}.h5"
+        ln -sfn "$(basename "$_prim_h5")" "$_prim_h5_alias"
+        echo "    HDF5(alias): ${_prim_h5_alias} -> $(basename "$_prim_h5")"
+    fi
 else
     echo ">>> [2/5] primordial_collapse skipped"
 fi
@@ -768,9 +892,16 @@ if [[ $DO_METAL -eq 1 ]]; then
     echo ""
     echo ">>> [3/5] metal_grain_collapse  zeta0=${METAL_ZETA0} s^-1  Z_metal=${METAL_Z_METAL} Z☉"
     mkdir -p "$METAL_OUT"
+
+    METAL_APP="${BUILD_DIR}/src/apps/collapse_metal_grain/metal_collapse"
+    if [[ $METAL_MINIMAL -eq 1 ]]; then
+        METAL_APP="${BUILD_DIR}/src/apps/collapse_metal_grain/arche_collapse_metal_minimal"
+    fi
+
     METAL_OUTDIR="$METAL_OUT" METAL_ZETA0="$METAL_ZETA0" METAL_Z_METAL="$METAL_Z_METAL" \
         METAL_FF_RET="$METAL_FF_RET" METAL_FRET_TABLE="$METAL_FRET_TABLE" METAL_FF_GAMMA="$METAL_FF_GAMMA" \
         METAL_JLW21="$METAL_JLW21" \
+        METAL_ZETA_X="$METAL_ZETA_X" METAL_E_X_EV="$METAL_E_X_EV" \
         METAL_REDSHIFT="$METAL_REDSHIFT" \
         METAL_ABUNDANCE_SET="$METAL_ABUNDANCE_SET" \
         METAL_TK0="$METAL_TK0" METAL_YE0="$METAL_YE0" \
@@ -786,9 +917,9 @@ if [[ $DO_METAL -eq 1 ]]; then
         METAL_T_CR_DES="$METAL_T_CR_DES" \
         METAL_C_GAS_FRAC="$METAL_C_GAS_FRAC" METAL_O_GAS_FRAC="$METAL_O_GAS_FRAC" \
         METAL_MG_GAS_FRAC="$METAL_MG_GAS_FRAC" \
-        METAL_MAX_ITER="$METAL_MAX_ITER" METAL_DATA_DIR="$METAL_DATA_DIR" \
-        PRIM_DATA_DIR="$PRIM_DATA_DIR" \
-        "${BUILD_DIR}/src/apps/collapse_metal_grain/metal_collapse"
+        METAL_MAX_ITER="$METAL_MAX_ITER" METAL_CHEM_TABLE="$METAL_CHEM_TABLE" \
+        PRIM_CHEM_TABLE="$PRIM_CHEM_TABLE" \
+        "$METAL_APP"
     METAL_CR_TAG=$(make_tag "$METAL_ZETA0")
     METAL_Z_TAG=$(make_tag "$METAL_Z_METAL")
     # fret tag: gamma mode → "-gamma"; table mode → "-step"; scalar → numeric (only when != 1.0)
@@ -808,14 +939,35 @@ if [[ $DO_METAL -eq 1 ]]; then
             METAL_JLW_TAG=$(make_tag "$METAL_JLW21")
         fi
     fi
+    METAL_ZX_TAG=""
+    if [[ -n "$METAL_ZETA_X" ]]; then
+        # append ZX tag only when zeta_X != 0.0
+        if awk -v v="$METAL_ZETA_X" 'BEGIN { exit (v+0 == 0.0) ? 1 : 0 }'; then
+            METAL_ZX_TAG=$(make_tag "$METAL_ZETA_X")
+        fi
+    fi
     if [[ -n "$METAL_REDSHIFT" ]]; then
         # append redshift tag only when z != 0.0
         if awk -v v="$METAL_REDSHIFT" 'BEGIN { exit (v+0 == 0.0) ? 1 : 0 }'; then
             METAL_ZRED_TAG=$(make_tag "$METAL_REDSHIFT")
         fi
     fi
-    _metal_h5="${METAL_OUT}/collapse_CR${METAL_CR_TAG}_Z${METAL_Z_TAG}${METAL_FRET_TAG:+_fret${METAL_FRET_TAG}}${METAL_JLW_TAG:+_JLW${METAL_JLW_TAG}}${METAL_ZRED_TAG:+_z${METAL_ZRED_TAG}}.h5"
+    METAL_MODEL_SUFFIX=""
+    [[ $METAL_MINIMAL -eq 1 ]] && METAL_MODEL_SUFFIX="_min"
+
+    _metal_stem="collapse_CR${METAL_CR_TAG}_Z${METAL_Z_TAG}${METAL_FRET_TAG:+_fret${METAL_FRET_TAG}}${METAL_JLW_TAG:+_JLW${METAL_JLW_TAG}}${METAL_ZX_TAG:+_ZX${METAL_ZX_TAG}}${METAL_ZRED_TAG:+_z${METAL_ZRED_TAG}}"
+    _metal_h5="${METAL_OUT}/${_metal_stem}${METAL_MODEL_SUFFIX}.h5"
     echo "    HDF5: ${_metal_h5}"
+
+    # analyze_collapse.py / resample_collapse.py currently look for the full
+    # filename stem (without _min; the metal minimal app appends _min at the end
+    # of the stem). In minimal mode, provide a symlink alias so existing
+    # postprocess tools continue to work unchanged.
+    if [[ $METAL_MINIMAL -eq 1 ]]; then
+        _metal_h5_alias="${METAL_OUT}/${_metal_stem}.h5"
+        ln -sfn "$(basename "$_metal_h5")" "$_metal_h5_alias"
+        echo "    HDF5(alias): ${_metal_h5_alias} -> $(basename "$_metal_h5")"
+    fi
 else
     echo ">>> [3/5] metal_grain_collapse skipped"
 fi

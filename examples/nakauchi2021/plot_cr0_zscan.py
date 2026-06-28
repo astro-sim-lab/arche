@@ -33,7 +33,7 @@ SP = {
     "e-": 2,
     "H2": 1,
     "HD": 12,
-    "Gr": 66,   # Gr^- (grain-)
+    "Gr": 66,  # Gr^- (grain-)
 }
 
 # ── Z values and labels ──────────────────────────────────────────────────────
@@ -53,22 +53,27 @@ COLORS = plt.cm.viridis(np.linspace(0.95, 0.05, len(Z_VALUES)))
 
 def load_h5(path):
     with h5py.File(path, "r") as f:
-        xnH = f["xnH"][:]
+        # Output schema v2 renamed "xnH" -> "nH"; fall back to the legacy v1
+        # name so this example works on both new and old .h5 files.
+        nH = f["nH"][:] if "nH" in f else f["xnH"][:]
         T_K = f["T_K"][:]
-        y   = f["y"][:]   # (N, 89)
-    return xnH, T_K, y
+        y = f["y"][:]  # (N, 89)
+    return nH, T_K, y
 
 
 def main():
     parser = argparse.ArgumentParser(
         description="Plot CR=0 metal_grain collapse profiles across metallicities"
     )
-    parser.add_argument("--h5dir", default="results/cr0_zscan/metal_grain",
-                        help="Directory containing collapse_CR0_Z*.h5")
-    parser.add_argument("--save", default="results/cr0_zscan",
-                        help="Output directory for PNG")
-    parser.add_argument("--show", action="store_true",
-                        help="Show figure interactively")
+    parser.add_argument(
+        "--h5dir",
+        default="results/cr0_zscan/metal_grain",
+        help="Directory containing collapse_CR0_Z*.h5",
+    )
+    parser.add_argument(
+        "--save", default="results/cr0_zscan", help="Output directory for PNG"
+    )
+    parser.add_argument("--show", action="store_true", help="Show figure interactively")
     args = parser.parse_args()
 
     fig, axes = plt.subplots(4, 1, figsize=(6, 12), sharex=True)
@@ -80,13 +85,13 @@ def main():
             print(f"  [skip] not found: {fname}")
             continue
 
-        xnH, T_K, y = load_h5(fname)
+        nH, T_K, y = load_h5(fname)
 
-        ax_T.plot(  xnH, T_K,             color=color, lw=1.2, label=z_label)
-        ax_e.plot(  xnH, y[:, SP["e-"]], color=color, lw=1.2)
-        ax_mol.plot(xnH, y[:, SP["H2"]], color=color, lw=1.2, ls="-")
-        ax_mol.plot(xnH, y[:, SP["HD"]], color=color, lw=1.2, ls="--")
-        ax_Gr.plot( xnH, y[:, SP["Gr"]], color=color, lw=1.2)
+        ax_T.plot(nH, T_K, color=color, lw=1.2, label=z_label)
+        ax_e.plot(nH, y[:, SP["e-"]], color=color, lw=1.2)
+        ax_mol.plot(nH, y[:, SP["H2"]], color=color, lw=1.2, ls="-")
+        ax_mol.plot(nH, y[:, SP["HD"]], color=color, lw=1.2, ls="--")
+        ax_Gr.plot(nH, y[:, SP["Gr"]], color=color, lw=1.2)
 
     # ── Axes formatting ──────────────────────────────────────────────────────
     ax_T.set_ylabel(r"$T\,[\mathrm{K}]$")
@@ -113,13 +118,18 @@ def main():
         ax.grid(True, which="both", ls=":", lw=0.4, alpha=0.5)
 
     # Top panel: Z legend (lower right)
-    ax_T.legend(loc="lower right", fontsize=7, ncol=1,
-                title=r"$\zeta_0 = 0$", title_fontsize=7)
+    ax_T.legend(
+        loc="lower right", fontsize=7, ncol=1, title=r"$\zeta_0 = 0$", title_fontsize=7
+    )
     ax_T.set_title(r"metal\_grain collapse, CR = 0", fontsize=10)
 
     # Molecule panel: linestyle legend for H2 / HD
-    h2_line = mlines.Line2D([], [], color="gray", ls="-",  lw=1.2, label=r"$\mathrm{H_2}$")
-    hd_line = mlines.Line2D([], [], color="gray", ls="--", lw=1.2, label=r"$\mathrm{HD}$")
+    h2_line = mlines.Line2D(
+        [], [], color="gray", ls="-", lw=1.2, label=r"$\mathrm{H_2}$"
+    )
+    hd_line = mlines.Line2D(
+        [], [], color="gray", ls="--", lw=1.2, label=r"$\mathrm{HD}$"
+    )
     ax_mol.legend(handles=[h2_line, hd_line], loc="lower right", fontsize=8)
 
     fig.tight_layout()

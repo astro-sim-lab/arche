@@ -52,6 +52,16 @@ Basic run:
 bash run_collapse.sh --prim-zeta0 1e-17 --metal-zeta0 1e-17 --metal-z-metal 1e-3
 ```
 
+Both networks use the full model by default. Add `--minimal` to run the compact
+primordial network (`arche_collapse_prim_minimal`), and/or `--metal-minimal` to
+run the compact metal-grain network (`Nakauchi2021_Minimal`, 40 species, the
+`arche_collapse_metal_minimal` binary). The minimal variants take the same
+CLI/env parameters as their full counterparts and reuse the same HDF5 tables;
+their output stem gains a `_min` tag (with a non-`_min` symlink alias for the
+plot/resample tools). The compact networks are also reachable from the library
+(`prim_minimal_*` / `metal_minimal_*` entry points, or the `"…_Minimal"` registry
+names — see `docs/api_reference.md`).
+
 Useful variants:
 
 ```bash
@@ -72,6 +82,17 @@ In `run_collapse.sh`, precedence is:
 1. CLI options
 2. Environment variables
 3. Config file (`params/default.conf` or `--config`)
+
+## Using the library only (external application)
+
+To drive the chemistry network from your own application — without the bundled
+`*_collapse` / `*_chemistry` executables — link **`libarche.a`** and include one
+stable header (`arche_api.h` for C++, `arche_capi.h` for C). No Eigen or HDF5
+headers appear in your own sources.
+
+Build, install (`find_package(arche)`), and consume (`find_package` /
+`add_subdirectory` / `FetchContent`) instructions, plus standalone runnable
+examples, live in **[`integration/`](../integration/README.md)**.
 
 ## More details
 

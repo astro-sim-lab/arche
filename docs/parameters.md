@@ -32,15 +32,17 @@ Precedence in `run_collapse.sh` is:
 | `PRIM_YH2` | no | `6e-7` | Initial H₂ fraction.  Must be in [0, 0.5) |
 | `PRIM_YHD` | no | `4e-10` | Initial HD fraction.  Must be ≥ 0.  y(H) = 1 − y(H⁺) − 2·y(H₂) − y(HD) must remain > 0 |
 | `PRIM_ABUNDANCE_SET` | no | `solar` | Abundance preset (`solar`, `default`, `alpha-enhanced`).  For primordial species, all presets currently use identical values |
-| `PRIM_OUTPUT_STRIDE` | no | `100` | Write one HDF5 row every N integration steps |
-| `PRIM_MAX_ITER` | no | `10000000` | Maximum number of integration steps |
+| `PRIM_OUTPUT_STRIDE` | no | `10` | Write one HDF5 row every N integration steps |
+| `PRIM_MAX_ITER` | no | `1000000` | Maximum number of integration steps |
 | `PRIM_DT_FACTOR` | no | `1e-3` | Timestep factor for regular steps (> 0) |
 | `PRIM_DT_FACTOR_INIT` | no | `1e-8` | Timestep factor for the first `PRIM_N_INIT_STEPS` steps (> 0) |
 | `PRIM_N_INIT_STEPS` | no | `10` | Number of initial short-timestep steps (integer, ≥ 0) |
 | `PRIM_XNH_STOP` | no | `1e23` | Stop threshold for H number density [cm⁻³] (> 0) |
 | `PRIM_CR_ATTEN_COL_DENS` | no | `96.0` | CR attenuation column density scale [g cm⁻²] (> 0) |
-| `PRIM_DATA_DIR` | no | compile-time `DATA_DIR` | Path to primordial reaction data directory |
+| `PRIM_CHEM_TABLE` | no | compile-time `PRIM_CHEM_TABLE` | Path to primordial.h5 chemistry table |
 | `PRIM_JLW21` | no | `0.0` | Lyman-Werner intensity J₂₁ [10⁻²¹ erg/s/cm²/Hz/sr].  `0.0` = no LW field.  Activates H₂/HD photodissociation and H⁻ photodetachment (operator-split after chemistry).  H₂ self-shielding uses Wolcott-Green & Haiman (2019) eq. 7–8 with density/temperature-dependent exponent α(n,T); HD uses WG2011 functional form (α = 2); H⁻ has no self-shielding |
+| `PRIM_ZETA_X` | no | `0.0` | X-ray primary HI photoionization rate ζ_X [s⁻¹].  `0.0` = no X-ray field.  **Requires binary compiled with `-DARCHE_XRAY=ON`** (default: OFF).  Beer-Lambert shielding applied: ζ_X_eff = ζ_X · exp(−τ_X), τ_X = (y_HI + 2·y_H₂)·n_H·λ_J·σ_HI(E_X) [Inayoshi & Omukai 2011].  **⚠️ Valid range: ζ_X < 1e-18 s⁻¹.  At ζ_X ≥ 1e-18 s⁻¹, NR instability causes yH₂ collapse and T runaway near nH ~ 1e10 cm⁻³, resulting in unphysical evolution (issue #39 sub-issue A).** |
+| `PRIM_E_X_EV` | no | `300.0` | Representative X-ray photon energy E_X [eV] used for cross-section σ_HI(E_X) in Beer-Lambert shielding (> 13.6 eV).  Effective only when `PRIM_ZETA_X` > 0 and binary compiled with `-DARCHE_XRAY=ON` |
 | `PRIM_REDSHIFT` | no | `0.0` | Cosmological redshift z.  Sets T_rad = 2.725 × (1+z) K |
 
 **Example — scalar f_ret**
@@ -98,7 +100,7 @@ Lines beginning with `#` are comments.  Rows must be in ascending `nH` order.
 | `METAL_FF_RET` | no | `1.0` | Free-fall retardation factor.  Ignored when `METAL_FRET_TABLE` or `METAL_FF_GAMMA` is set |
 | `METAL_FRET_TABLE` | no | *(unset)* | Path to a 2-column ASCII table `nH [cm⁻³]  f_ret` (step-function, ratchet-forward).  When set, overrides `METAL_FF_RET`; filename gets `_fret-step` suffix.  Ignored when `METAL_FF_GAMMA` is set |
 | `METAL_FF_GAMMA` | no | *(unset)* | Enable gamma-dependent collapse factor (flag; set to `1`).  Uses `t_eff = t_ff / sqrt(1−f(γ))` (Higuchi+2018 Eq.5-7).  Overrides `METAL_FF_RET` and `METAL_FRET_TABLE`; filename gets `_fret-gamma` suffix |
-| `METAL_XNH0` | no | `1.0` | Initial H number density [cm⁻³] |
+| `METAL_XNH0` | no | `0.1` | Initial H number density [cm⁻³] |
 | `METAL_TK0` | no | `100.0` | Initial gas temperature [K] |
 | `METAL_YE0` | no | `1e-4` | Initial electron fraction y(e⁻) = y(H⁺).  Must be in [0, 1) |
 | `METAL_YH2` | no | `6e-7` | Initial H₂ fraction.  Must be in [0, 0.5) |
@@ -117,9 +119,11 @@ Lines beginning with `#` are comments.  Rows must be in ascending `nH` order.
 | `METAL_C_GAS_FRAC` | no | `0.28` | Initial C gas-phase fraction ([0, 1]) |
 | `METAL_O_GAS_FRAC` | no | `0.54` | Initial O gas-phase fraction ([0, 1]) |
 | `METAL_MG_GAS_FRAC` | no | `0.02` | Initial Mg gas-phase fraction ([0, 1]) |
-| `METAL_DATA_DIR` | no | compile-time value | Path to metal-grain reaction data directory |
-| `PRIM_DATA_DIR` | no | compile-time value | Path to shared primordial data directory |
+| `METAL_CHEM_TABLE` | no | compile-time value | Path to metal_grain.h5 chemistry table |
+| `PRIM_CHEM_TABLE` | no | compile-time value | Path to primordial.h5 chemistry table |
 | `METAL_JLW21` | no | `0.0` | Lyman-Werner intensity J₂₁ [10⁻²¹ erg/s/cm²/Hz/sr].  `0.0` = no LW field.  Same physics as `PRIM_JLW21` (WG2019 H₂ self-shielding, WG2011 HD, no H⁻ shielding) |
+| `METAL_ZETA_X` | no | `0.0` | X-ray primary HI photoionization rate ζ_X [s⁻¹].  `0.0` = no X-ray field.  **Requires binary compiled with `-DARCHE_XRAY=ON`** (default: OFF).  Same shielding model as `PRIM_ZETA_X`.  **⚠️ High ζ_X (≥ 1e-18 s⁻¹) validity for metal model has not been verified; avoid until confirmed (issue #39 sub-issue A).** |
+| `METAL_E_X_EV` | no | `300.0` | Representative X-ray photon energy E_X [eV] (> 13.6 eV).  Effective only when `METAL_ZETA_X` > 0 and binary compiled with `-DARCHE_XRAY=ON` |
 | `METAL_REDSHIFT` | no | `0.0` | Cosmological redshift z |
 
 **Example**
@@ -136,7 +140,7 @@ METAL_ZETA0=1e-17 METAL_Z_METAL=1e-3 \
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `PRIM_ZETA0` | **yes** | — | CR ionization rate ζ₀ [s⁻¹] |
-| `PRIM_DATA_DIR` | no | compile-time `DATA_DIR` | Path to primordial reaction data directory |
+| `PRIM_CHEM_TABLE` | no | compile-time `PRIM_CHEM_TABLE` | Path to primordial.h5 chemistry table |
 | `PRIM_XNH` | no | `1e4` | Fixed H number density [cm⁻³] |
 | `PRIM_T_K` | no | `100.0` | Fixed gas temperature [K] |
 | `PRIM_YE0` | no | `1e-4` | Initial electron / H⁺ fraction.  Must be in [0, 1) |
@@ -146,6 +150,8 @@ METAL_ZETA0=1e-17 METAL_Z_METAL=1e-3 \
 | `PRIM_CR_ATTEN_COL_DENS` | no | `96.0` | CR attenuation column density scale [g cm⁻²] used in `zeta = zeta0 * exp(-rho * L / col)` (> 0) |
 | `PRIM_REDSHIFT` | no | `0.0` | Cosmological redshift z.  Sets `T_rad = 2.725*(1+z)` K (≥ 0) |
 | `PRIM_JLW21` | no | `0.0` | Lyman-Werner intensity J₂₁ for chemistry update (≥ 0) |
+| `PRIM_ZETA_X` | no | `0.0` | X-ray primary HI photoionization rate ζ_X [s⁻¹].  Requires `-DARCHE_XRAY=ON` |
+| `PRIM_E_X_EV` | no | `300.0` | Representative X-ray photon energy [eV] (> 13.6 eV).  Requires `-DARCHE_XRAY=ON` |
 | `PRIM_NSTEPS` | no | `200` | Number of integration steps |
 | `PRIM_DT` | no | `1e10` | Time step size [s] |
 
@@ -170,8 +176,8 @@ Output is written to stdout (step, t, species abundances, cooling rates).
 |---|---|---|---|
 | `METAL_ZETA0` | **yes** | — | CR ionization rate ζ₀ [s⁻¹] |
 | `METAL_Z_METAL` | **yes** | — | Metallicity Z [Z☉] |
-| `PRIM_DATA_DIR` | no | compile-time value | Path to shared primordial data directory |
-| `METAL_DATA_DIR` | no | compile-time value | Path to metal-grain data directory |
+| `PRIM_CHEM_TABLE` | no | compile-time value | Path to primordial.h5 chemistry table |
+| `METAL_CHEM_TABLE` | no | compile-time value | Path to metal_grain.h5 chemistry table |
 | `METAL_XNH` | no | `1e4` | Fixed H number density [cm⁻³] |
 | `METAL_T_K` | no | `100.0` | Fixed gas temperature [K] |
 | `METAL_YE0` | no | `1e-4` | Initial electron / H⁺ fraction.  Must be in [0, 1) |
@@ -187,6 +193,8 @@ Output is written to stdout (step, t, species abundances, cooling rates).
 | `METAL_MG_GAS_FRAC` | no | `0.02` | Initial Mg gas-phase fraction ([0,1]) |
 | `METAL_REDSHIFT` | no | `0.0` | Cosmological redshift z.  Sets `T_rad = 2.725*(1+z)` K (≥ 0) |
 | `METAL_JLW21` | no | `0.0` | Lyman-Werner intensity J₂₁ for chemistry update (≥ 0) |
+| `METAL_ZETA_X` | no | `0.0` | X-ray primary HI photoionization rate ζ_X [s⁻¹].  Requires `-DARCHE_XRAY=ON` |
+| `METAL_E_X_EV` | no | `300.0` | Representative X-ray photon energy [eV] (> 13.6 eV).  Requires `-DARCHE_XRAY=ON` |
 | `METAL_NSTEPS` | no | `200` | Number of integration steps |
 | `METAL_DT` | no | `1e10` | Time step size [s] |
 
@@ -203,6 +211,9 @@ METAL_ZETA0=1e-17 METAL_Z_METAL=1e-3 METAL_XNH=1e4 \
 
 `run_collapse.sh` builds the binaries, runs both collapse simulations, and calls
 `analyze_collapse.py`.
+Both networks use the full model by default; pass `--minimal` to switch the
+primordial run to `arche_collapse_prim_minimal`, and/or `--metal-minimal` to
+switch the metal-grain run to `arche_collapse_metal_minimal`.
 
 By default, `run_collapse.sh` loads `params/default.conf` and errors out if that
 file is missing (unless `--no-config` is specified).
@@ -238,7 +249,7 @@ Run from the project root.
 | `--common-n-init-steps` | VALUE | from config (`COMMON_N_INIT_STEPS`) | Shared number of initial short-timestep steps (integer, ≥ 0) |
 | `--common-xnh-stop` | VALUE | from config (`COMMON_XNH_STOP`) | Shared stop threshold for nH [cm⁻³] (> 0) |
 | `--common-cr-col-dens` | VALUE | from config (`COMMON_CR_ATTEN_COL_DENS`) | Shared CR attenuation column density scale [g cm⁻²] (> 0) |
-| `--common-data-dir` | DIR | from config (`COMMON_DATA_DIR`) | Shared reaction data directory |
+| `--common-chem-table` | DIR | from config (`COMMON_CHEM_TABLE`) | Default chemistry table (HDF5) used when per-network values are unset |
 | `--prim-zeta0` | VALUE | *(required unless `--no-prim`)* | Primordial CR rate [s⁻¹] |
 | `--metal-zeta0` | VALUE | *(required unless `--no-metal`)* | Metal-grain CR rate [s⁻¹] |
 | `--metal-z-metal` | VALUE | *(required unless `--no-metal`)* | Metallicity [Z☉] |
@@ -265,7 +276,7 @@ Run from the project root.
 | `--prim-n-init-steps` | VALUE | from config (`PRIM_N_INIT_STEPS` or `COMMON_N_INIT_STEPS`) | Primordial number of initial short-timestep steps (integer, ≥ 0) |
 | `--prim-xnh-stop` | VALUE | from config (`PRIM_XNH_STOP` or `COMMON_XNH_STOP`) | Primordial stop threshold for nH [cm⁻³] (> 0) |
 | `--prim-cr-col-dens` | VALUE | from config (`PRIM_CR_ATTEN_COL_DENS` or `COMMON_CR_ATTEN_COL_DENS`) | Primordial CR attenuation column density [g cm⁻²] (> 0) |
-| `--prim-data-dir` | DIR | from config (`PRIM_DATA_DIR` or `COMMON_DATA_DIR`) | Primordial reaction data directory |
+| `--prim-chem-table` | DIR | from config (`PRIM_CHEM_TABLE` or `COMMON_CHEM_TABLE`) | Primordial chemistry table (HDF5) |
 | `--metal-tk0` | VALUE | `100.0` | Metal-grain initial gas temperature [K] |
 | `--metal-ye0` | VALUE | `1e-4` | Metal-grain initial electron fraction y(e⁻) = y(H⁺) |
 | `--metal-yh2` | VALUE | `6e-7` | Metal-grain initial H₂ fraction |
@@ -285,11 +296,13 @@ Run from the project root.
 | `--metal-c-gas-frac` | VALUE | from config (`METAL_C_GAS_FRAC`) | Initial C gas-phase fraction ([0, 1]) |
 | `--metal-o-gas-frac` | VALUE | from config (`METAL_O_GAS_FRAC`) | Initial O gas-phase fraction ([0, 1]) |
 | `--metal-mg-gas-frac` | VALUE | from config (`METAL_MG_GAS_FRAC`) | Initial Mg gas-phase fraction ([0, 1]) |
-| `--metal-data-dir` | DIR | from config (`METAL_DATA_DIR` or `COMMON_DATA_DIR`) | Metal-grain reaction data directory |
+| `--metal-chem-table` | DIR | from config (`METAL_CHEM_TABLE` or `COMMON_CHEM_TABLE`) | Metal-grain chemistry table (HDF5) |
 | `--build-dir` | DIR | from config (`BUILD_DIR`, fallback `build`) | CMake build directory |
 | `--out-dir` | DIR | from config (`OUT_DIR`, fallback `results`) | Root for HDF5 output (`DIR/primordial/`, `DIR/metal_grain/`) |
 | `--save-dir` | DIR | from config (`SAVE_DIR`, fallback `results`) | Root for figure output (`DIR/primordial/`, `DIR/metal_grain/`) |
 | `--config` | FILE | `params/default.conf` | Parameter file path |
+| `--minimal` | — | off | Run primordial with the compact minimal network (`arche_collapse_prim_minimal`).  Primordial HDF5 stem becomes `collapse_CR<...>_min...`; when launched via `run_collapse.sh`, a non-`_min` alias symlink is also created for plot/resample compatibility |
+| `--metal-minimal` | — | off | Run metal-grain with the compact minimal network (`arche_collapse_metal_minimal`, `Nakauchi2021_Minimal`, 40 species).  Metal HDF5 stem becomes `collapse_CR<...>_Z<...>..._min.h5` (the `_min` tag is appended at the end of the stem); a non-`_min` alias symlink is also created for plot/resample compatibility |
 | `--no-config` | — | — | Disable parameter file loading |
 | `--no-build` | — | — | Skip CMake build step |
 | `--no-prim` | — | — | Skip primordial collapse |
@@ -333,7 +346,7 @@ Policy:
 | `COMMON_N_INIT_STEPS` | Shared number of initial short-timestep steps |
 | `COMMON_XNH_STOP` | Shared stop threshold for nH |
 | `COMMON_CR_ATTEN_COL_DENS` | Shared CR attenuation column density scale |
-| `COMMON_DATA_DIR` | Shared reaction data directory |
+| `COMMON_CHEM_TABLE` | Default chemistry table (HDF5) used when per-network values are unset |
 
 If both `COMMON_*` and run-specific keys are present in config, run-specific
 keys (`PRIM_*`, `METAL_*`) take precedence for that run.
@@ -398,4 +411,16 @@ bash run_collapse.sh --prim-zeta0 1e-17 --metal-zeta0 1e-17 --metal-z-metal 1e-3
 bash run_collapse.sh --prim-zeta0 0 \
                    --prim-tk0 500 --prim-ye0 1e-3 --prim-yh2 1e-5 \
                    --no-metal
+
+# Primordial minimal network (README quickstart case 1-A)
+bash run_collapse.sh --no-metal --minimal --prim-zeta0 0 --prim-redshift 20 \
+                   --fig-combo --no-resample \
+                   --save-dir results/quickstart/case_1A \
+                   --out-dir results/quickstart/case_1A
+
+# Metal minimal network (README quickstart case 4-A)
+bash run_collapse.sh --no-prim --metal-minimal --metal-zeta0 1e-17 --metal-z-metal 1e-3 \
+                   --fig-combo --no-resample \
+                   --save-dir results/quickstart/case_4A \
+                   --out-dir results/quickstart/case_4A
 ```

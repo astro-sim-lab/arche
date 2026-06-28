@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026 Shingo Hirano and Sho Higashi
+# Licensed under the MIT found in the
+# https://github.com/astro-sim-lab/arche/blob/main/LICENSE
 """
 resample_collapse.py — HDF5 collapse output → uniform log10(nH) bin CSV table
 
@@ -64,6 +67,7 @@ except ImportError:
 # Averaging functions
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def log_avg(arr: np.ndarray) -> float:
     """Geometric mean: 10^mean(log10(x)) for positive entries only.
     Returns NaN if no positive values exist."""
@@ -84,9 +88,9 @@ def lin_avg(arr: np.ndarray) -> float:
 # Keys: exact column names as they appear in the output CSV header.
 # Fallback (not in dict) → log_avg.
 AVG_FUNCS: Dict[str, Callable[[np.ndarray], float]] = {
-    "xLmbd_net": lin_avg,
+    "Lambda_net": lin_avg,
     # Add overrides here, e.g.:
-    #   "xGam_cmp": lin_avg,
+    #   "Gamma_cmp": lin_avg,
 }
 
 
@@ -98,6 +102,33 @@ def _avg(col_name: str, arr: np.ndarray) -> float:
 # ─────────────────────────────────────────────────────────────────────────────
 # HDF5 loading
 # ─────────────────────────────────────────────────────────────────────────────
+
+# Output-schema compatibility (N-B). v2 files use renamed dataset names
+# (nH / Lambda_* / Gamma_* / M_J / lambda_J); legacy v1 files use x-prefixed
+# names. Alias v1 keys to v2 on load so the rest of the tool uses v2 names.
+LEGACY_TO_V2 = {
+    "xnH": "nH",
+    "xLmbd_net": "Lambda_net",
+    "xLmbd_line": "Lambda_line",
+    "xLmbd_cnt": "Lambda_cnt",
+    "xLmbd_ch": "Lambda_chem",
+    "xLmbd_gas": "Lambda_gas",
+    "xLmbd_gr": "Lambda_gr",
+    "xLmbd_Lya": "Lambda_Lya",
+    "xLmbd_H2": "Lambda_H2",
+    "xLmbd_HD": "Lambda_HD",
+    "xLmbd_CO": "Lambda_CO",
+    "xLmbd_OH": "Lambda_OH",
+    "xLmbd_H2O": "Lambda_H2O",
+    "xLmbd_CII": "Lambda_CII",
+    "xLmbd_CI": "Lambda_CI",
+    "xLmbd_OI": "Lambda_OI",
+    "xGam_CR": "Gamma_CR",
+    "xGam_cmp": "Gamma_cmp",
+    "xMJ": "M_J",
+    "xlmbd_J": "lambda_J",
+}
+
 
 def load_h5(path: str) -> dict:
     """Load one HDF5 file into a dict.  Arrays are numpy; attrs are scalars/str."""
@@ -122,12 +153,16 @@ def load_h5(path: str) -> dict:
             if isinstance(sp_raw, bytes):
                 sp_raw = sp_raw.decode()
             d["species"] = [s.strip() for s in sp_raw.split(",")]
+    for old, new in LEGACY_TO_V2.items():
+        if old in d and new not in d:
+            d[new] = d[old]
     return d
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Grid definition
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def make_grid(log_min: float, log_max: float, step: float):
     """Return (bin_edges, bin_centers) arrays.
@@ -144,11 +179,14 @@ def make_grid(log_min: float, log_max: float, step: float):
 # Core resampling
 # ─────────────────────────────────────────────────────────────────────────────
 
-def resample(data: dict,
-             log_min: float = -2.0,
-             log_max: float = 23.0,
-             step: float    = 0.5,
-             has_grain: bool = False) -> tuple[np.ndarray, list[str], np.ndarray]:
+
+def resample(
+    data: dict,
+    log_min: float = -2.0,
+    log_max: float = 23.0,
+    step: float = 0.5,
+    has_grain: bool = False,
+) -> tuple[np.ndarray, list[str], np.ndarray]:
     """Resample *data* onto a uniform log10(nH) grid.
 
     Returns
@@ -160,20 +198,20 @@ def resample(data: dict,
     edges, centers = make_grid(log_min, log_max, step)
     N_bins = len(centers)
 
-    log_nH_data = np.log10(data["xnH"])
+    log_nH_data = np.log10(data["nH"])
     # Assign each data point to a bin
-    bin_idx = np.digitize(log_nH_data, edges) - 1   # 0-based; -1 = below, N = above
+    bin_idx = np.digitize(log_nH_data, edges) - 1  # 0-based; -1 = below, N = above
 
     # ── Build ordered column list ────────────────────────────────────────────
     # Fixed columns (in order)
     scalar_cols = ["T_K"]
     if has_grain:
         scalar_cols.append("T_gr_K")
-    scalar_cols.append("xLmbd_net")
+    scalar_cols.append("Lambda_net")
 
     species_list = data.get("species", [])
     N_sp = data["y"].shape[1] if "y" in data else 0
-    sp_cols = [f"y_{i}" for i in range(N_sp)]   # y_0, y_1, …
+    sp_cols = [f"y_{i}" for i in range(N_sp)]  # y_0, y_1, …
 
     colnames = scalar_cols + sp_cols
     N_col = len(colnames)
@@ -181,9 +219,9 @@ def resample(data: dict,
 
     # ── Iterate over bins ────────────────────────────────────────────────────
     for b in range(N_bins):
-        mask = (bin_idx == b)
+        mask = bin_idx == b
         if not np.any(mask):
-            continue   # leave as NaN
+            continue  # leave as NaN
 
         col_i = 0
         for col in scalar_cols:
@@ -192,7 +230,7 @@ def resample(data: dict,
             col_i += 1
 
         if "y" in data:
-            y_block = data["y"]   # shape (N_rows, N_sp)
+            y_block = data["y"]  # shape (N_rows, N_sp)
             for j in range(N_sp):
                 table[b, col_i] = _avg(sp_cols[j], y_block[mask, j])
                 col_i += 1
@@ -203,6 +241,7 @@ def resample(data: dict,
 # ─────────────────────────────────────────────────────────────────────────────
 # I/O helpers
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def _h5_stem(h5dir: str, stem: str) -> str:
     return os.path.join(h5dir, stem + ".h5")
@@ -230,8 +269,9 @@ def _jlw_suffix(jlw_tag: str) -> str:
     return f"_JLW{jlw_tag}" if jlw_tag else ""
 
 
-def _prim_stem(cr_tag: str, fret_tag: str = "", zred_tag: str = "",
-               jlw_tag: str = "") -> str:
+def _prim_stem(
+    cr_tag: str, fret_tag: str = "", zred_tag: str = "", jlw_tag: str = ""
+) -> str:
     s = f"collapse_CR{cr_tag}"
     s += _fret_suffix(fret_tag)
     s += _jlw_suffix(jlw_tag)
@@ -240,9 +280,9 @@ def _prim_stem(cr_tag: str, fret_tag: str = "", zred_tag: str = "",
     return s
 
 
-def _metal_stem(cr_tag: str, z_tag: str,
-                fret_tag: str = "", zred_tag: str = "",
-                jlw_tag: str = "") -> str:
+def _metal_stem(
+    cr_tag: str, z_tag: str, fret_tag: str = "", zred_tag: str = "", jlw_tag: str = ""
+) -> str:
     s = f"collapse_CR{cr_tag}_Z{z_tag}"
     s += _fret_suffix(fret_tag)
     s += _jlw_suffix(jlw_tag)
@@ -251,9 +291,13 @@ def _metal_stem(cr_tag: str, z_tag: str,
     return s
 
 
-def write_csv(out_path: str, centers: np.ndarray,
-              colnames: list, table: np.ndarray,
-              species_list: list) -> None:
+def write_csv(
+    out_path: str,
+    centers: np.ndarray,
+    colnames: list,
+    table: np.ndarray,
+    species_list: list,
+) -> None:
     """Write resampled table to CSV.
 
     Column order: log10_nH, <scalar_cols>, y_0, y_1, …
@@ -279,107 +323,156 @@ def write_csv(out_path: str, centers: np.ndarray,
                 row_vals.append("NaN" if np.isnan(v) else f"{v:.6e}")
             fout.write(",".join(row_vals) + "\n")
 
-    print(f"  saved: {out_path}  ({len(centers)} bins, "
-          f"{int(np.sum(~np.isnan(table[:, 0])))}/{len(centers)} non-empty)")
+    print(
+        f"  saved: {out_path}  ({len(centers)} bins, "
+        f"{int(np.sum(~np.isnan(table[:, 0])))}/{len(centers)} non-empty)"
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Per-case processing
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def process_prim(args) -> None:
     if not (args.h5dir and args.cr_tag):
         return
 
-    stem    = _prim_stem(args.cr_tag, args.fret_tag or "", args.zred_tag or "",
-                         args.jlw_tag or "")
-    h5path  = _h5_stem(args.h5dir, stem)
+    stem = _prim_stem(
+        args.cr_tag, args.fret_tag or "", args.zred_tag or "", args.jlw_tag or ""
+    )
+    h5path = _h5_stem(args.h5dir, stem)
     save_dir = args.save if args.save else args.h5dir
     os.makedirs(save_dir, exist_ok=True)
 
     print(f"[prim] loading {h5path}")
     data = load_h5(h5path)
     centers, colnames, table = resample(
-        data, args.log_nH_min, args.log_nH_max, args.log_nH_step,
-        has_grain=False)
+        data, args.log_nH_min, args.log_nH_max, args.log_nH_step, has_grain=False
+    )
 
     out_path = os.path.join(save_dir, f"resample_{stem}.csv")
-    write_csv(out_path, centers, colnames, table,
-              data.get("species", []))
+    write_csv(out_path, centers, colnames, table, data.get("species", []))
 
 
 def process_metal(args) -> None:
     if not (args.metal_h5dir and args.metal_cr and args.metal_z):
         return
 
-    stem     = _metal_stem(args.metal_cr, args.metal_z,
-                           args.metal_fret or "", args.metal_zred or "",
-                           args.metal_jlw or "")
-    h5path   = _h5_stem(args.metal_h5dir, stem)
+    stem = _metal_stem(
+        args.metal_cr,
+        args.metal_z,
+        args.metal_fret or "",
+        args.metal_zred or "",
+        args.metal_jlw or "",
+    )
+    h5path = _h5_stem(args.metal_h5dir, stem)
     save_dir = args.metal_save if args.metal_save else args.metal_h5dir
     os.makedirs(save_dir, exist_ok=True)
 
     print(f"[metal] loading {h5path}")
     data = load_h5(h5path)
     centers, colnames, table = resample(
-        data, args.log_nH_min, args.log_nH_max, args.log_nH_step,
-        has_grain=True)
+        data, args.log_nH_min, args.log_nH_max, args.log_nH_step, has_grain=True
+    )
 
     out_path = os.path.join(save_dir, f"resample_{stem}.csv")
-    write_csv(out_path, centers, colnames, table,
-              data.get("species", []))
+    write_csv(out_path, centers, colnames, table, data.get("species", []))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CLI
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Resample HDF5 collapse output onto uniform log10(nH) bins.")
+        description="Resample HDF5 collapse output onto uniform log10(nH) bins."
+    )
 
     # ── prim ────────────────────────────────────────────────────────────────
     pg = p.add_argument_group("Prim")
-    pg.add_argument("--h5dir",    metavar="DIR", help="Directory with prim HDF5 files")
-    pg.add_argument("--cr-tag",   metavar="TAG", help="CR tag  (e.g. '1p5e-17')")
-    pg.add_argument("--fret-tag", metavar="TAG", default="",
-                    help="f_ret tag: scalar → e.g. '3p0'; table → 'step' (→ _fret-step)")
-    pg.add_argument("--jlw-tag",  metavar="TAG", default="",
-                    help="Lyman-Werner tag (e.g. '1p5' → _JLW1p5; omit for J_LW21=0)")
-    pg.add_argument("--zred-tag", metavar="TAG", default="",
-                    help="Redshift tag (omit for z=0)")
-    pg.add_argument("--save",     metavar="DIR",
-                    help="Output directory for prim CSV (default: same as --h5dir)")
+    pg.add_argument("--h5dir", metavar="DIR", help="Directory with prim HDF5 files")
+    pg.add_argument("--cr-tag", metavar="TAG", help="CR tag  (e.g. '1p5e-17')")
+    pg.add_argument(
+        "--fret-tag",
+        metavar="TAG",
+        default="",
+        help="f_ret tag: scalar → e.g. '3p0'; table → 'step' (→ _fret-step)",
+    )
+    pg.add_argument(
+        "--jlw-tag",
+        metavar="TAG",
+        default="",
+        help="Lyman-Werner tag (e.g. '1p5' → _JLW1p5; omit for J_LW21=0)",
+    )
+    pg.add_argument(
+        "--zred-tag", metavar="TAG", default="", help="Redshift tag (omit for z=0)"
+    )
+    pg.add_argument(
+        "--save",
+        metavar="DIR",
+        help="Output directory for prim CSV (default: same as --h5dir)",
+    )
 
     # ── metal ────────────────────────────────────────────────────────────────
     mg = p.add_argument_group("Metal")
-    mg.add_argument("--metal-h5dir", metavar="DIR", help="Directory with metal HDF5 files")
-    mg.add_argument("--metal-cr",    metavar="TAG", help="CR tag for metal")
-    mg.add_argument("--metal-z",     metavar="TAG", help="Z tag for metal (e.g. '1p2e-4')")
-    mg.add_argument("--metal-fret",  metavar="TAG", default="",
-                    help="f_ret tag for metal: scalar → e.g. '3p0'; table → 'step'")
-    mg.add_argument("--metal-jlw",   metavar="TAG", default="",
-                    help="Lyman-Werner tag for metal (e.g. '1p5' → _JLW1p5)")
-    mg.add_argument("--metal-zred",  metavar="TAG", default="",
-                    help="Redshift tag for metal")
-    mg.add_argument("--metal-save",  metavar="DIR",
-                    help="Output directory for metal CSV (default: same as --metal-h5dir)")
+    mg.add_argument(
+        "--metal-h5dir", metavar="DIR", help="Directory with metal HDF5 files"
+    )
+    mg.add_argument("--metal-cr", metavar="TAG", help="CR tag for metal")
+    mg.add_argument("--metal-z", metavar="TAG", help="Z tag for metal (e.g. '1p2e-4')")
+    mg.add_argument(
+        "--metal-fret",
+        metavar="TAG",
+        default="",
+        help="f_ret tag for metal: scalar → e.g. '3p0'; table → 'step'",
+    )
+    mg.add_argument(
+        "--metal-jlw",
+        metavar="TAG",
+        default="",
+        help="Lyman-Werner tag for metal (e.g. '1p5' → _JLW1p5)",
+    )
+    mg.add_argument(
+        "--metal-zred", metavar="TAG", default="", help="Redshift tag for metal"
+    )
+    mg.add_argument(
+        "--metal-save",
+        metavar="DIR",
+        help="Output directory for metal CSV (default: same as --metal-h5dir)",
+    )
 
     # ── grid ─────────────────────────────────────────────────────────────────
     gg = p.add_argument_group("Grid")
-    gg.add_argument("--log-nH-min",  type=float, default=-2.0,
-                    metavar="FLOAT", help="log10(nH) lower edge (default: -2.0)")
-    gg.add_argument("--log-nH-max",  type=float, default=23.0,
-                    metavar="FLOAT", help="log10(nH) upper edge (default: 23.0)")
-    gg.add_argument("--log-nH-step", type=float, default=0.1,
-                    metavar="FLOAT", help="Bin width in log10(nH) (default: 0.5)")
+    gg.add_argument(
+        "--log-nH-min",
+        type=float,
+        default=-2.0,
+        metavar="FLOAT",
+        help="log10(nH) lower edge (default: -2.0)",
+    )
+    gg.add_argument(
+        "--log-nH-max",
+        type=float,
+        default=23.0,
+        metavar="FLOAT",
+        help="log10(nH) upper edge (default: 23.0)",
+    )
+    gg.add_argument(
+        "--log-nH-step",
+        type=float,
+        default=0.1,
+        metavar="FLOAT",
+        help="Bin width in log10(nH) (default: 0.5)",
+    )
 
     return p
 
 
 def main() -> None:
     parser = _build_parser()
-    args   = parser.parse_args()
+    args = parser.parse_args()
 
     ran = False
 
