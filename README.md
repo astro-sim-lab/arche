@@ -26,8 +26,6 @@ For setup and full usage details, see:
 - `docs/output_schema.md`
 - `integration/README.md` (using ARCHE as a library)
 
-Official companion tool:
-- [ResiTable](https://github.com/astro-sim-lab/resitable)
 
 ---
 
