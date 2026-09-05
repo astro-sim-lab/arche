@@ -19,6 +19,8 @@
 // ---------------------------------------------------------------------------
 #include "api/arche_api.h"
 
+#include <cmath>
+#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
@@ -27,6 +29,7 @@
 #include "solve/chemistry.h"  // ChemCell<Model>, chem_(full_)step<Model>,
                               // make_*_table, <model>::net::init_topology,
                               // load_pf_tables_h5, ReactionTable<...>
+#include "thermo/eos.h"
 
 namespace arche {
 
@@ -394,6 +397,10 @@ struct IModelCell {
   virtual double& T_K() noexcept = 0;
   virtual double& mu() noexcept = 0;
   virtual double& gamma() noexcept = 0;
+  virtual void reset() noexcept = 0;
+  virtual double mu_from_y() const noexcept = 0;
+  virtual double gamma_from_y(double T_K) const noexcept = 0;
+  virtual double T_from_e(double e_cgs) const noexcept = 0;
 };
 
 struct IModelRuntime {
@@ -414,6 +421,24 @@ struct ModelCellImpl final : IModelCell {
   double& T_K() noexcept override { return cell.state.T_K; }
   double& mu() noexcept override { return cell.state.mu; }
   double& gamma() noexcept override { return cell.state.gamma; }
+  void reset() noexcept override {
+    cell.reset_var();
+    if constexpr (Model::has_escape) {
+      cell.es = EscapeState{};
+    }
+  }
+  double mu_from_y() const noexcept override {
+    return thermo::mean_molecular_weight(
+        thermo::make_eos_composition<Model>(cell.state.y));
+  }
+  double gamma_from_y(double T_K) const noexcept override {
+    return thermo::adiabatic_index(
+        thermo::make_eos_composition<Model>(cell.state.y), T_K);
+  }
+  double T_from_e(double e_cgs) const noexcept override {
+    return thermo::temperature_from_specific_internal_energy<Model>(
+        cell.state.y, e_cgs);
+  }
 };
 
 template <class Model>
@@ -530,6 +555,16 @@ double& model_cell_nH(ModelCell& c) noexcept { return c.impl->nH(); }
 double& model_cell_T_K(ModelCell& c) noexcept { return c.impl->T_K(); }
 double& model_cell_mu(ModelCell& c) noexcept { return c.impl->mu(); }
 double& model_cell_gamma(ModelCell& c) noexcept { return c.impl->gamma(); }
+void model_cell_reset(ModelCell& c) noexcept { c.impl->reset(); }
+double model_mu_from_y(const ModelCell& c) noexcept {
+  return c.impl->mu_from_y();
+}
+double model_gamma_from_y(const ModelCell& c, double T_K) noexcept {
+  return c.impl->gamma_from_y(T_K);
+}
+double model_T_from_e(const ModelCell& c, double e_cgs) noexcept {
+  return c.impl->T_from_e(e_cgs);
+}
 
 ChemFullRates model_step(const ModelRuntime& m, ModelCell& c, double dt,
                          const ChemParams& params,

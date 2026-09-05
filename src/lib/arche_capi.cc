@@ -11,6 +11,7 @@
 // ---------------------------------------------------------------------------
 #include "api/arche_capi.h"
 
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -410,6 +411,25 @@ void arche_model_cell_get_scalars(const ArcheModelCell* cell, double* nH,
   if (T_K) *T_K = arche::model_cell_T_K(c);
   if (mu) *mu = arche::model_cell_mu(c);
   if (gamma) *gamma = arche::model_cell_gamma(c);
+}
+void arche_model_cell_reset(ArcheModelCell* cell) {
+  if (!cell) return;
+  arche::model_cell_reset(*reinterpret_cast<arche::ModelCell*>(cell));
+}
+double arche_model_mu_from_y(const ArcheModelCell* cell) {
+  if (!cell) return std::numeric_limits<double>::quiet_NaN();
+  return arche::model_mu_from_y(
+      *reinterpret_cast<const arche::ModelCell*>(cell));
+}
+double arche_model_gamma_from_y(const ArcheModelCell* cell, double T_K) {
+  if (!cell) return std::numeric_limits<double>::quiet_NaN();
+  return arche::model_gamma_from_y(
+      *reinterpret_cast<const arche::ModelCell*>(cell), T_K);
+}
+double arche_model_T_from_e(const ArcheModelCell* cell, double e_cgs) {
+  if (!cell) return std::numeric_limits<double>::quiet_NaN();
+  return arche::model_T_from_e(*reinterpret_cast<const arche::ModelCell*>(cell),
+                               e_cgs);
 }
 int arche_model_step(const ArcheModelRuntime* model, ArcheModelCell* cell,
                      double dt, const ArcheChemParams* params,
