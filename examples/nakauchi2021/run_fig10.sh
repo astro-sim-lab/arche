@@ -3,7 +3,7 @@
 # Licensed under the MIT found in the
 # https://github.com/astro-sim-lab/arche/blob/main/LICENSE
 # run_fig10.sh — reproduce the simulation grid behind Nakauchi et al. (2021)
-# Figure 10 with the arche-dev metal_grain network.
+# Figure 10 with the arche `metal_grain` network.
 #
 # Grid: 7 metallicities x 3 cosmic-ray ionization rates x {reduced, full}
 #   Z/Zsun = 1, 1e-1, 1e-2, 1e-3, 1e-4, 1e-5, 1e-6

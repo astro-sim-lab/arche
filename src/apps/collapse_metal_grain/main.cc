@@ -5,40 +5,44 @@
 // main.cc — one-zone gravitational collapse (metal_grain network)
 //
 // Single case per run; parameters are read from environment variables:
-//   METAL_ZETA0          — CR ionization rate [s^-1]       (required)
-//   METAL_Z_METAL        — metallicity [Z_sun]              (required)
-//   METAL_OUTDIR         — output directory                 (optional, default:
-//   results/metal/h5) METAL_FF_RET         — free-fall retardation factor
-//   (optional, default: 1.0) METAL_FRET_TABLE     — 2-column ASCII file:
-//   nH[cm^-3]  f_ret  step-function table
-//                          Rows sorted by ascending nH; comments with '#'
-//                          allowed. If set, METAL_FF_RET is ignored.  fret_tag
-//                          = "-step" → output:
-//                          collapse_CR<cr>_Z<z>_fret-step.h5
-//   METAL_FF_GAMMA       — gamma-dependent collapse factor (flag; set to 1 to
-//   enable)
+//   METAL_ZETA0          — CR ionization rate [s^-1]  (required)
+//   METAL_Z_METAL        — metallicity [Z_sun]  (required)
+//   METAL_OUTDIR         — output directory
+//                          (optional, default: results/metal/h5)
+//   METAL_FF_RET         — free-fall retardation factor
+//                          (optional, default: 1.0)
+//   METAL_FRET_TABLE     — 2-column ASCII file: nH[cm^-3]  f_ret
+//                          step-function table.  Rows sorted by ascending nH;
+//                          comments with '#' allowed.  If set, METAL_FF_RET is
+//                          ignored.  fret_tag = "-step"
+//                          → output: collapse_CR<cr>_Z<z>_fret-step.h5
+//   METAL_FF_GAMMA       — gamma-dependent collapse factor
+//                          (flag; set to 1 to enable)
 //                          Uses t_eff = t_ff / sqrt(1−f(γ))  (Higuchi+2018
-//                          Eq.5-7) Overrides METAL_FF_RET and METAL_FRET_TABLE.
-//                          fret_tag = "-gamma"  → output:
-//                          collapse_CR<cr>_Z<z>_fret-gamma.h5
-//   METAL_XNH0           — initial H number density [cm^-3] (optional,
-//   default: 1.0) METAL_OUTPUT_STRIDE  — write every N-th step to HDF5
-//   (optional, default: 10) METAL_MAX_ITER       — maximum integration steps
-//   (optional, default: 1000000) METAL_CHEM_TABLE     — path to metal_grain.h5
-//   chemistry table
+//                          Eq.5-7).  Overrides METAL_FF_RET and
+//                          METAL_FRET_TABLE.  fret_tag = "-gamma"
+//                          → output: collapse_CR<cr>_Z<z>_fret-gamma.h5
+//   METAL_XNH0           — initial H number density [cm^-3]
+//                          (optional, default: 0.1)
+//   METAL_OUTPUT_STRIDE  — write every N-th step to HDF5
+//                          (optional, default: 10)
+//   METAL_MAX_ITER       — maximum integration steps
+//                          (optional, default: 1000000)
+//   METAL_CHEM_TABLE     — path to metal_grain.h5 chemistry table
 //                          (optional, default: compile-time METAL_CHEM_TABLE)
-//   METAL_JLW21          — Lyman-Werner radiation intensity J_21 [10^-21
-//   erg/s/cm^2/Hz/sr]
+//   METAL_JLW21          — Lyman-Werner radiation intensity J_21
+//                          [10^-21 erg/s/cm^2/Hz/sr]
 //                          (optional, default: 0.0 = no LW field)
 //                          Activates H2/HD photodissociation and H-
 //                          photodetachment.
 //   METAL_SRA_RATE       — short-lived radionuclide ionization scaling
-//                          (optional, default: 0.0; zeta_short = rate * 7.6e-19
-//                          [s^-1])
+//                          (optional, default: 0.0;
+//                          zeta_short = rate * 7.6e-19 [s^-1])
 //   METAL_LRA_RATE       — long-lived radionuclide ionization scaling
-//                          (optional, default: 0.0; zeta_long  = rate * 1.4e-22
-//                          * Z_metal [s^-1])
-//   METAL_ABUNDANCE_SET  — abundance preset name (optional, default: solar)
+//                          (optional, default: 0.0;
+//                          zeta_long = rate * 1.4e-22 * Z_metal [s^-1])
+//   METAL_ABUNDANCE_SET  — abundance preset name
+//                          (optional, default: solar)
 //                          currently supported: solar, default
 //
 // HDF5 layout (root-level datasets):
@@ -228,8 +232,8 @@ using collapse_defaults::kTCMB0;
 using collapse_defaults::kTHighStop;
 using collapse_defaults::kXnHStop;
 
-// ─── CR attenuation constants (metal-specific)
-// ──────────────────────────────── Secondary CR fraction (Padovani et al.)
+// ─── CR attenuation constants (metal-specific) ───────────────────────────────
+// Secondary CR fraction (Padovani et al.)
 constexpr double kCrAttenuSecondFrac = 7.6e-2;
 // Metal background CR floor [erg s^-1 g^-1 / Z_sun]
 constexpr double kCrMetalBkgnd = 1.4e-22;
@@ -259,8 +263,7 @@ constexpr double kMggasFrac = arche::metal_grain::mg_gas_frac_default;
 using collapse_defaults::kItMax;
 using collapse_defaults::kOutputStride;
 
-// ─── Initial conditions / scenario defaults — from collapse_defaults.h
-// ────────
+// ─── Initial conditions / scenario defaults — from collapse_defaults.h ───────
 using collapse_defaults::kFFRet;
 using collapse_defaults::kJLW21;
 using collapse_defaults::kTK0;
@@ -479,21 +482,23 @@ void RunCollapse(
   }
   const double y_D = abund.yD - y_Dp - y_HD;
 
-  y[AppSp::H] = y_H;              // H
-  y[AppSp::H2] = y_H2;            // H2
-  y[AppSp::Hp] = y_Hp;            // H+
-  y[AppSp::He] = abund.yHe;       // He
-  y[AppSp::D] = y_D;              // D
-  y[AppSp::HD] = y_HD;            // HD
-  y[AppSp::Dp] = y_Dp;            // D+
-  y[AppSp::Lip] = abund.yLi;      // Li+
-  y[AppSp::C] = XC * c_gas_frac;  // CI
-  y[AppSp::O] = XO * o_gas_frac;  // OI
+  // clang-format off
+  y[AppSp::H] = y_H;                  // H
+  y[AppSp::H2] = y_H2;                // H2
+  y[AppSp::Hp] = y_Hp;                // H+
+  y[AppSp::He] = abund.yHe;           // He
+  y[AppSp::D] = y_D;                  // D
+  y[AppSp::HD] = y_HD;                // HD
+  y[AppSp::Dp] = y_Dp;                // D+
+  y[AppSp::Lip] = abund.yLi;          // Li+
+  y[AppSp::C] = XC * c_gas_frac;      // CI
+  y[AppSp::O] = XO * o_gas_frac;      // OI
 #ifndef ARCHE_METAL_MINIMAL
   y[AppSp::Kp] = 0.0;   // K+  (initially zero; absent from the compact network)
   y[AppSp::Nap] = 0.0;  // Na+ (initially zero; absent from the compact network)
 #endif
   y[AppSp::Mgp] = XMg * mg_gas_frac;  // Mg+
+  // clang-format on
   // e- = sum of positive ions
 #ifdef ARCHE_METAL_MINIMAL
   y[AppSp::e] = y_Hp + y_Dp + abund.yLi + y[AppSp::Mgp];

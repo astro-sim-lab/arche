@@ -272,10 +272,51 @@ exposes named presets (`solar`, `alpha-enhanced`).
 > species you know. ARCHE does not assume a default composition — an
 > uninitialised `y[]` slot is read as a real abundance.
 
-ARCHE does **not** enforce element conservation across steps; it integrates the
-network you hand it. Charge neutrality and element totals should hold in your
-initial condition (e.g. `y[e] ≈ y[H+] + y[He+] + …`), and the network preserves
-them to solver tolerance thereafter.
+Element and charge conservation is **enforced on all four shipped networks**.
+After each implicit chemistry step `solve/conservation.h` projects `y` back onto
+the affine set that restores the element totals the step was handed and drives
+the net charge to zero.
+
+| Network | Tracked rows | Elements |
+|---|---:|---|
+| `Nakauchi2019` | 5 | H / He / D / Li + charge |
+| `Nakauchi2019_Minimal` | 5 | H / He / D / Li + charge |
+| `Nakauchi2021_Minimal` | 8 | the above + C / O / Mg + charge (the compact network carries no K or Na) |
+| `Nakauchi2021` | 10 | the above + K / Na + charge |
+
+Read the count back from the table you actually loaded rather than trusting this
+table — `prim_table_n_invariants(*tbl)` and its three siblings (§7.1) report how
+many rows that handle is **configured** with. A table built through a path that
+dropped the rows returns `0` here, and then `conservation_projected` is `false`
+on every step with no other outward sign.
+
+⚠ The configured count is not the count enforced on a given step. Weights are
+the species' own abundances, so a row whose carriers are all zero drops out of
+that step's solve — correctly, since it owes nothing — while the step still
+reports `conservation_projected = true`.
+
+Primordial: measured residuals stay at the float64 floor of each element total
+(≤ 4.4e-16 relative; ≤ 1.5e-13 when `J_LW21 > 0`), against ≤ 7.6e-11 without it.
+
+Metal (`Nakauchi2021`, Z = 1, `nH_stop = 1e23`): the residual is held near
+1.3e-12 from `nH` = 1e14 to 1e22. Without the projection it grows by roughly two
+orders per density decade over that range, reaching 2.3e-3 by 1e22.
+
+> **Metal networks gained the projection in 2026-08; their numerical output
+> changed as a result.** Element conservation was previously not enforced there
+> and `conservation_projected` was `false` on every metal step. If you pinned
+> results against an older ARCHE, re-baseline them.
+
+⚠ The grain-surface reservoirs the `collapse_metal_grain` application keeps
+(depleted C / O / Mg / K / Na) live outside `y[]`, so the projection conserves
+the **gas-phase** total of those elements across a chemistry step. That is the
+correct invariant for the step, because the application moves mass between the
+grains and the gas only between steps, never inside one.
+
+In both cases charge neutrality and element totals should hold in your initial
+condition (e.g. `y[e] ≈ y[H+] + y[He+] + …`). Note the projection targets the
+totals *the step was handed*, not any absolute reference, so it preserves — it
+does not repair — a composition that was wrong on entry.
 
 ---
 
@@ -373,6 +414,10 @@ struct ChemFullRates {
     double k_gr;         // grain opacity × Z_metal [cm^2/g]  (metal only)
     double T_gr_K;       // solved grain temperature [K]  (metal only)
     bool   solver_failed;// true → step rolled back; state unchanged
+    bool   conservation_projected;  // true → element/charge projection ran.
+                         // All four shipped networks register rows (§4), so on
+                         // a converged step false means the projection itself
+                         // declined; see core/state.h for the four causes.
 };
 ```
 
@@ -398,6 +443,7 @@ struct ChemRates {
     double Lambda_chem;  // chemistry cooling   [erg g^-1 s^-1]
     double Gamma_CR;     // CR heating          [erg g^-1 s^-1]
     double Gamma_X;      // X-ray heating       [erg g^-1 s^-1]
+    bool   conservation_projected;  // see ChemFullRates
 };
 ```
 
@@ -427,6 +473,13 @@ PrimCellPtr         cell   = prim_cell_create_owned();
 PrimMinimalCellPtr  cellm  = prim_minimal_cell_create_owned();
 MetalCellPtr        cellM  = metal_cell_create_owned();
 MetalMinimalCellPtr cellMm = metal_minimal_cell_create_owned();
+
+// Invariant rows the conservation projection will enforce for each table
+// (0 = none; see §4). Read from the handle, not from the factory:
+int n   = prim_table_n_invariants(*tbl);           // 5
+int nm  = prim_minimal_table_n_invariants(*tblm);  // 5
+int nM  = metal_table_n_invariants(*tblM);         // 10
+int nMm = metal_minimal_table_n_invariants(*tblMm);// 8
 
 ChemStateZM&           s   = prim_cell_state(*cell);
 ChemStatePrimMinimal&  sm  = prim_minimal_cell_state(*cellm);
@@ -480,6 +533,78 @@ C ABI: `arche_model_create` / `arche_model_n_species` / `arche_model_species` /
 `arche_model_cell_create` / `arche_model_cell_y` / `arche_model_cell_set_scalars`
 / `arche_model_step`.
 
+### 7.4 Registry cell reset and read-only thermodynamic maps
+
+The name-registry layer additionally exposes these C++ functions:
+
+```cpp
+void model_cell_reset(ModelCell& c) noexcept;
+double model_mu_from_y(const ModelCell& c) noexcept;
+double model_gamma_from_y(const ModelCell& c, double T_K) noexcept;
+double model_T_from_e(const ModelCell& c, double e_cgs) noexcept;
+```
+
+The C ABI mirrors them:
+
+```c
+void arche_model_cell_reset(ArcheModelCell* cell);
+double arche_model_mu_from_y(const ArcheModelCell* cell);
+double arche_model_gamma_from_y(const ArcheModelCell* cell, double T_K);
+double arche_model_T_from_e(const ArcheModelCell* cell, double e_cgs);
+```
+
+`model_cell_reset()` clears only hidden integration history: the reaction-rate
+cache `var`, the conservation-projection remainder `cons_carry`, and, for the
+two `Nakauchi2021*` models, the persisted line-cooling `EscapeState` warm-start
+arrays. It does not change `y[]`, `nH`, `T_K`, stored `mu`, or stored `gamma`.
+Reset a thread-local scratch cell when assigning it to a different physical
+cell. Do not reset between consecutive steps of the same physical cell: that
+would discard the intended conservation remainder and solver warm starts.
+
+The three thermo functions are read-only and do not write their results back to
+the cell. `mu` is dimensionless in proton-mass units, `gamma` is dimensionless,
+`T_K` is in K, and `e_cgs` is in erg g⁻¹. They evaluate the same
+internal `thermo` EOS implementation that the kernel uses for the same `y` and
+`T`, including its species-summation order and `c_H2()` evaluation. The
+`thermo` headers and implementation are private library details: external code
+uses only this facade (or the C ABI below) and must not include them. This
+guarantee concerns identical inputs; a completed step may subsequently alter
+`y[]` through the conservation, LW, or X-ray operator-split paths.
+
+`model_gamma_from_y()` requires a positive, finite `T_K`. It returns quiet NaN
+for `T_K <= 0`, NaN, and either infinity. Positive finite inputs retain the
+kernel EOS summation order and bit identity described above.
+
+`model_T_from_e()` inverts
+
+```text
+e(T) = k_B T [1.5 S_atoms(y) + c_H2(T) y_H2]
+       / [(1 + 4 yHe) m_p]
+```
+
+by bracket-preserving bisection in `log(T)` over `[1, 10¹²] K`, stopping
+when the bracket endpoints are adjacent at double precision. A finite energy
+below or above the bracket maps to `1 K` or `10¹² K`, respectively. An
+`e_cgs = NaN` input produces a NaN result.
+
+`c_H2()` evaluates the para/ortho (1:3) rotational partition functions
+continuously across `1000 K`; it does not switch to the classical rotational
+limit at that temperature.  Through `10^6 K`, the rotational sum retains
+enough states that the last included level has a Boltzmann exponent of at
+least 60; above that temperature it uses the continuous rigid-rotor
+high-temperature expansion.  Thus the EOS does not have a branch-induced
+multivalued energy interval near `1000 K`, and `model_T_from_e()` returns the
+unique root selected by its deterministic log-space bisection.  The residual
+step in `c_H2()` at `1000 K`, left by the change in the number of summed
+rotational states, is `2.2e-14` relative.  Measured `T -> e -> T` round trips on
+H₂-dominated compositions (`y_H2` = 0.5 and 0.1, which maximise the `c_H2`
+contribution) stay within `1.1e-11` relative over the whole `[1, 10¹²] K`
+bracket — the worst case sits at the cold end, near `1.4 K` — tightening to
+`1.5e-12` for `T ≥ 10 K` and `6e-13` for `T ≥ 100 K`.
+
+For C, reset is a no-op when `cell == NULL`; each NULL thermo query returns a
+quiet NaN.
+
 ---
 
 ## 8. What `chem_full_step_*` does internally
@@ -518,6 +643,27 @@ Cells are not large but are not trivially small either (the metal cell plus the
 solver's stack scratch is tens of KB). For OpenMP, allocate one cell per thread
 on the heap (the `*_create_owned()` helpers) and reuse it across cells/steps,
 calling the stepping function in the parallel region.
+
+When a name-registry cell is a per-thread scratch object, reset it once per new
+physical cell before loading that cell's visible state:
+
+```cpp
+#pragma omp parallel
+{
+  ModelCellPtr scratch = model_cell_create_owned(*model);
+  #pragma omp for
+  for (std::size_t i = 0; i < grid.size(); ++i) {
+    model_cell_reset(*scratch);  // grid[i] is unrelated to the prior i
+    load_visible_state(grid[i], *scratch);
+    for (int substep = 0; substep < n_substeps; ++substep) {
+      // No reset here: these are consecutive steps of the same physical cell.
+      ChemFullRates r = model_step(*model, *scratch, dt, params, shield);
+      /* update the same physical cell */
+    }
+    store_visible_state(*scratch, grid[i]);
+  }
+}
+```
 
 ---
 

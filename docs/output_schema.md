@@ -113,6 +113,57 @@ metal-grain, but appends a `_min` tag to the file stem and stores a 40-column
 | `units_time` | string | `"s"` |
 | `units_length` | string | `"cm"` |
 | `units_B` | string | `"G"` |
+| `exit_code` | int | Why the run stopped: `0` normal (nH ceiling), `1` max_iter, `2` T ceiling (10⁵ K), `3` internal energy e ≤ 0, `4` NaN/Inf in nH or T, `5` NR subcycle max depth exceeded |
+| `exit_message` | string | The same reason in words, e.g. `"Normal: nH reached nH_stop"` |
+| `conservation_rows` | int | Element/charge rows the projection is **configured** to enforce (`n_invariants`, read from the loaded table).  `0` = this network registers none.  ⚠ Not the number enforced on any given step — see below |
+| `conservation_steps_total` | int | Steps whose chemistry solve succeeded.  ⚠ Counted right after the kernel, so a step whose later thermodynamic update fails (`exit_code` = 3) is still included; `0` means the run solved nothing |
+| `conservation_steps_projected` | int | Of those, the steps whose abundances the projection was applied to |
+| `conservation_first_unprojected_step` | int | Step index of the first unprojected step; `-1` = every step was projected |
+| `conservation_first_unprojected_nH` | float64 | Density [cm⁻³] that same step entered with; `-1.0` = every step was projected |
+
+
+**Reading the `conservation_*` attributes.** They report whether the element /
+charge projection (`solve/conservation.h`) actually ran, which the abundances
+themselves do not show: a projection that never fires leaves a file that looks
+completely normal.  The metal network spent a development cycle in exactly that
+state — `conservation_rows` at its expected 10, most steps unprojected — because
+two of the ten rows were empty and an empty row took the whole weighted matrix
+down with it.
+
+Read the counts together with `conservation_rows`:
+
+| `conservation_rows` | projected / total | Meaning |
+|---|---|---|
+| `0` | `0 / N` | This network registers no invariant rows, so the projection declines on every step. Expected, not a fault |
+| `> 0` | `N / N` | Every step was projected. Expected |
+| `> 0` | anything below `N / N` | ⚠ The projection declined on a step it was configured for. Start at `conservation_first_unprojected_nH` |
+
+The last row is unambiguous in a collapse run: a step that fails to converge
+ends the run with `exit_code` = 5 instead of being counted here, so the only
+remaining causes are the projection's own decline paths — a row that owes a
+residual no surviving species can carry, a weighted matrix that is not positive
+definite, or a repair larger than the allowed relative shift.
+
+⚠ **`conservation_rows` counts configured rows, not rows enforced on a step.**
+The projection weights each species by its own abundance, so a row whose carrier
+species are all zero contributes nothing and is dropped from that step's solve.
+Dropping it is correct — there is nothing to conserve and nothing owed — and the
+step still counts as projected. But it means `conservation_rows = 10` together
+with `projected = total` does **not** assert that ten rows were enforced on every
+step.
+
+A measured example: in a metal-grain collapse at Z = 1 with the app holding all
+potassium and sodium in its grain reservoir, the K and Na rows carry nothing
+until the grains evaporate at n<sub>H</sub> ≈ 1.7 × 10¹⁵ cm⁻³ — **68.9 % of the
+run** — so eight of ten rows are solved over that stretch while the attributes
+read `rows = 10`, `projected = total`. The remaining eight elements are fully
+enforced throughout; no element is silently unconserved. Read the pair as
+"the projection ran on every step", not "ten invariants held on every step".
+
+These attributes do not change `schema_version`, which versions **dataset
+names** only (see [Schema version](#schema-version)): no dataset name, shape, or
+dataset value changes when they are added. The attributes are themselves new
+stored values — the guarantee is about the datasets.
 
 ### Datasets
 
@@ -194,6 +245,16 @@ Index 0 → H, index 1 → H₂, index 2 → e⁻, …
 | `ic_y_H2` | float64 | Initial H₂ fraction (default 6e-7) |
 | `ic_y_HD` | float64 | Initial HD fraction (default 4e-10) |
 | `network` | string | Full: `"metal_grain N_sp=89 N_react=1200"`; minimal: `"metal_grain_minimal N_sp=40 N_react=113 (...)"` |
+| `exit_code` | int | Why the run stopped: `0` normal (nH ceiling), `1` max_iter, `2` T ceiling (10⁵ K), `3` internal energy e ≤ 0, `4` NaN/Inf in nH or T, `5` NR subcycle max depth exceeded |
+| `exit_message` | string | The same reason in words, e.g. `"Normal: nH reached nH_stop"` |
+| `conservation_rows` | int | Element/charge rows the projection is **configured** to enforce (`n_invariants`, read from the loaded table).  `0` = this network registers none.  ⚠ Not the number enforced on any given step — see below |
+| `conservation_steps_total` | int | Steps whose chemistry solve succeeded.  ⚠ Counted right after the kernel, so a step whose later thermodynamic update fails (`exit_code` = 3) is still included; `0` means the run solved nothing |
+| `conservation_steps_projected` | int | Of those, the steps whose abundances the projection was applied to |
+| `conservation_first_unprojected_step` | int | Step index of the first unprojected step; `-1` = every step was projected |
+| `conservation_first_unprojected_nH` | float64 | Density [cm⁻³] that same step entered with; `-1.0` = every step was projected |
+
+See [`prim_collapse` root attributes](#root-attributes) for how to read the
+`conservation_*` group.
 
 ### Datasets
 
