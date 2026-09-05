@@ -65,16 +65,22 @@ target_compile_options(arche PUBLIC
         $<$<CXX_COMPILER_ID:IntelLLVM>: -xHost -fp-model=precise>
     >
 )
+# Warnings are PRIVATE: they apply to libarche's own translation units and are
+# not forced on projects that link arche::arche.
+target_compile_options(arche PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang,IntelLLVM>: -Wall -Wextra>
+)
 
 # --- install / export (find_package(arche)) ---
-# Only the lightweight public-facade headers are installed (the closure reachable
-# from api/arche_api.h / api/arche_capi.h): api/arche_api.h -> core/state.h ->
-# core/species_index.h -> core/species_catalog.h, plus the standalone C ABI
-# api/arche_capi.h. The Eigen/HDF5-
-# dependent kernel headers (solve/chemistry.h, solve/chemreact.h,
-# kinetics/topology.h, ...) and the internal rate-kernel bookkeeping
-# (kinetics/reaction_index.h) are deliberately NOT shipped, so an installed
-# consumer keeps the same "no Eigen/HDF5 in your own sources" contract.
+# Only the lightweight public-facade headers are installed (the closure
+# reachable from api/arche_api.h / api/arche_capi.h): api/arche_api.h ->
+# core/state.h -> core/species_index.h -> core/species_catalog.h, plus the
+# standalone C ABI api/arche_capi.h.  The Eigen/HDF5-dependent kernel headers
+# (solve/chemistry.h, solve/chemreact.h, kinetics/topology.h, ...), internal
+# thermo headers (thermo/eos.h, thermo/h2_thermodynamics.h), and internal
+# rate-kernel bookkeeping (kinetics/reaction_index.h) are deliberately NOT
+# shipped.  Installed consumers use only the facade thermo queries and retain
+# the "no Eigen/HDF5 in your own sources" contract.
 option(ARCHE_INSTALL "Generate install/export rules for libarche (find_package(arche))" ON)
 if(ARCHE_INSTALL)
     include(CMakePackageConfigHelpers)

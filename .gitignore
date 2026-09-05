@@ -10,19 +10,19 @@ Thumbs.db
 *.mod
 *.out
 build/
+build_*/
+build-*/
+_prefix
 
 # Runtime outputs
+tmp/
 results/
-.dev/reference/fortran/metal_grain/test/
 
 # Python artifacts
 __pycache__/
 *.pyc
 .venv/
 .pytest_cache/
-
-# Release staging area
-.dev/arche/
 
 # Block AI Related
 AGENTS.md

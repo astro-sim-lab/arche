@@ -561,7 +561,6 @@ inline double ci_cool_fs(double nH, double T_K, double y_e, double y_a,
     // Abrahamsson et al. 2007 collisional rates
     auto p4 = [](double x) { return std::pow(x, -0.25); };
     auto p3 = [](double x) { return std::pow(x, -1.0 / 3.0); };
-    auto p05 = [](double x) { return std::pow(x, -0.5); };
     double T_K4 = T_K;
     double lnCH_01 =
         3.6593 + 56.6023 * p4(T_K4) - 802.9765 * p4(T_K4) * p4(T_K4) +
@@ -752,13 +751,12 @@ inline double oi_cool_fs(double nH, double T_K, double y_e, double y_a,
 // This function computes CO, OH, H2O, CII, CI, OI.
 // It sets rates.CO, .OH, .H2O, .CII, .CI, .OI and .Lya.
 // ---------------------------------------------------------------------------
-inline void line_cool_metal(double nH, double T_K, double T_rad, double y_H,
-                            double y_H2, double y_e, double y_Hp, double y_He,
-                            double y_CI, double y_CII, double y_OI, double y_OH,
-                            double y_CO, double y_H2O, double tau_cnt,
-                            double Nc_CO, double Nc_OH, double Nc_H2O,
-                            double Nc_CII, double Nc_CI, double Nc_OI,
-                            EscapeState& es, LineCoolRates& rates) {
+inline void line_cool_metal(
+    double nH, double T_K, double T_rad, double y_H, double y_H2, double y_e,
+    [[maybe_unused]] double y_Hp, [[maybe_unused]] double y_He, double y_CI,
+    double y_CII, double y_OI, double y_OH, double y_CO, double y_H2O,
+    double tau_cnt, double Nc_CO, double Nc_OH, double Nc_H2O, double Nc_CII,
+    double Nc_CI, double Nc_OI, EscapeState& es, LineCoolRates& rates) {
   constexpr double yHe = abundance_ref::yHe;
   constexpr double m_p = phys::m_p;
   const double rho_norm = 1.0 / ((1.0 + 4.0 * yHe) * m_p);  // 1/((1+4yHe)mp)
