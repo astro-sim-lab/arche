@@ -19,6 +19,8 @@
 // ---------------------------------------------------------------------------
 #include "api/arche_api.h"
 
+#include <cmath>
+#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
@@ -27,6 +29,7 @@
 #include "solve/chemistry.h"  // ChemCell<Model>, chem_(full_)step<Model>,
                               // make_*_table, <model>::net::init_topology,
                               // load_pf_tables_h5, ReactionTable<...>
+#include "thermo/eos.h"
 
 namespace arche {
 
@@ -118,8 +121,12 @@ const ChemStateMetalMinimal& metal_minimal_cell_state(
 PrimTable* load_prim_table(const std::string& h5_path) {
   auto* tbl = new PrimTable();
   try {
-    zero_metal::net::init_topology(tbl->impl);  // topology from C++ source
-    load_pf_tables_h5(tbl->impl, h5_path);      // partition functions from HDF5
+    // Go through make_zero_metal_table rather than repeating its body: it also
+    // derives the element/charge invariant rows the conservation projection
+    // needs (solve/conservation.h), and an inlined copy of the topology+PF
+    // steps silently omitted them, leaving the full network unprojected while
+    // the compact one (which does call its make_* function) was corrected.
+    tbl->impl = make_zero_metal_table(h5_path);
   } catch (...) {
     delete tbl;
     throw;
@@ -160,8 +167,13 @@ void metal_minimal_table_destroy(MetalMinimalTable* tbl) noexcept {
 MetalTable* load_metal_table(const std::string& h5_path) {
   auto* tbl = new MetalTable();
   try {
-    metal_grain::net::init_topology(tbl->impl);  // topology from C++ source
-    load_pf_tables_h5(tbl->impl, h5_path);  // partition functions from HDF5
+    // Go through make_metal_grain_table for the same reason load_prim_table
+    // goes through make_zero_metal_table: it also derives the element/charge
+    // invariant rows.  Inlining the topology+PF steps here instead would omit
+    // them silently, and every app reaching this network through the facade
+    // would run unprojected.  Every load_* entry point calls its make_*
+    // function for this reason.
+    tbl->impl = make_metal_grain_table(h5_path);
   } catch (...) {
     delete tbl;
     throw;
@@ -169,6 +181,22 @@ MetalTable* load_metal_table(const std::string& h5_path) {
   return tbl;
 }
 void metal_table_destroy(MetalTable* tbl) noexcept { delete tbl; }
+
+// ── Invariant-row count ────────────────────────────────────────────────────
+// Reads the row count off the table the caller holds, so it reports the facade
+// path rather than the make_* factory's return value.
+int prim_table_n_invariants(const PrimTable& tbl) noexcept {
+  return tbl.impl.n_invariants;
+}
+int prim_minimal_table_n_invariants(const PrimMinimalTable& tbl) noexcept {
+  return tbl.impl.n_invariants;
+}
+int metal_table_n_invariants(const MetalTable& tbl) noexcept {
+  return tbl.impl.n_invariants;
+}
+int metal_minimal_table_n_invariants(const MetalMinimalTable& tbl) noexcept {
+  return tbl.impl.n_invariants;
+}
 
 // ── Stepping entry points ──────────────────────────────────────────────────
 // Thin forwarders to the templated kernel.  No transformation of arguments or
@@ -369,6 +397,10 @@ struct IModelCell {
   virtual double& T_K() noexcept = 0;
   virtual double& mu() noexcept = 0;
   virtual double& gamma() noexcept = 0;
+  virtual void reset() noexcept = 0;
+  virtual double mu_from_y() const noexcept = 0;
+  virtual double gamma_from_y(double T_K) const noexcept = 0;
+  virtual double T_from_e(double e_cgs) const noexcept = 0;
 };
 
 struct IModelRuntime {
@@ -389,6 +421,24 @@ struct ModelCellImpl final : IModelCell {
   double& T_K() noexcept override { return cell.state.T_K; }
   double& mu() noexcept override { return cell.state.mu; }
   double& gamma() noexcept override { return cell.state.gamma; }
+  void reset() noexcept override {
+    cell.reset_var();
+    if constexpr (Model::has_escape) {
+      cell.es = EscapeState{};
+    }
+  }
+  double mu_from_y() const noexcept override {
+    return thermo::mean_molecular_weight(
+        thermo::make_eos_composition<Model>(cell.state.y));
+  }
+  double gamma_from_y(double T_K) const noexcept override {
+    return thermo::adiabatic_index(
+        thermo::make_eos_composition<Model>(cell.state.y), T_K);
+  }
+  double T_from_e(double e_cgs) const noexcept override {
+    return thermo::temperature_from_specific_internal_energy<Model>(
+        cell.state.y, e_cgs);
+  }
 };
 
 template <class Model>
@@ -505,6 +555,16 @@ double& model_cell_nH(ModelCell& c) noexcept { return c.impl->nH(); }
 double& model_cell_T_K(ModelCell& c) noexcept { return c.impl->T_K(); }
 double& model_cell_mu(ModelCell& c) noexcept { return c.impl->mu(); }
 double& model_cell_gamma(ModelCell& c) noexcept { return c.impl->gamma(); }
+void model_cell_reset(ModelCell& c) noexcept { c.impl->reset(); }
+double model_mu_from_y(const ModelCell& c) noexcept {
+  return c.impl->mu_from_y();
+}
+double model_gamma_from_y(const ModelCell& c, double T_K) noexcept {
+  return c.impl->gamma_from_y(T_K);
+}
+double model_T_from_e(const ModelCell& c, double e_cgs) noexcept {
+  return c.impl->T_from_e(e_cgs);
+}
 
 ChemFullRates model_step(const ModelRuntime& m, ModelCell& c, double dt,
                          const ChemParams& params,

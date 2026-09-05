@@ -6,75 +6,95 @@
 //
 // Single case per run; parameters are read from environment variables:
 //   PRIM_ZETA0          — CR ionization rate [s^-1]  (required)
-//   PRIM_OUTDIR         — output directory            (optional, default:
-//   results/prim/h5) PRIM_FF_RET         — free-fall retardation factor
-//   (optional, default: 1.0) PRIM_FRET_TABLE     — 2-column ASCII file:
-//   nH[cm^-3]  f_ret  step-function table
-//                         Rows sorted by ascending nH; comments with '#'
-//                         allowed. If set, PRIM_FF_RET is ignored.  fret_tag =
-//                         "-step" → output: collapse_CR<tag>_fret-step.h5
-//   PRIM_FF_GAMMA       — gamma-dependent collapse factor (flag; set to 1 to
-//   enable)
+//   PRIM_OUTDIR         — output directory
+//                         (optional, default: results/prim/h5)
+//   PRIM_FF_RET         — free-fall retardation factor
+//                         (optional, default: 1.0)
+//   PRIM_FRET_TABLE     — 2-column ASCII file: nH[cm^-3]  f_ret
+//                         step-function table.  Rows sorted by ascending nH;
+//                         comments with '#' allowed.  If set, PRIM_FF_RET is
+//                         ignored.  fret_tag = "-step"
+//                         → output: collapse_CR<tag>_fret-step.h5
+//   PRIM_FF_GAMMA       — gamma-dependent collapse factor
+//                         (flag; set to 1 to enable)
 //                         Uses t_eff = t_ff / sqrt(1−f(γ))  (Higuchi+2018
-//                         Eq.5-7) Overrides PRIM_FF_RET and PRIM_FRET_TABLE.
-//                         fret_tag = "-gamma"  → output:
-//                         collapse_CR<tag>_fret-gamma.h5
-//   PRIM_XNH0           — initial H number density [cm^-3] (optional, default:
-//   0.1) PRIM_OUTPUT_STRIDE  — write every N-th step to HDF5  (optional,
-//   default: 100) PRIM_MAX_ITER       — maximum integration steps (optional,
-//   default: 10000000) PRIM_CHEM_TABLE     — path to primordial.h5 chemistry
-//   table
+//                         Eq.5-7).  Overrides PRIM_FF_RET and PRIM_FRET_TABLE.
+//                         fret_tag = "-gamma"
+//                         → output: collapse_CR<tag>_fret-gamma.h5
+//   PRIM_XNH0           — initial H number density [cm^-3]
+//                         (optional, default: 0.1)
+//   PRIM_OUTPUT_STRIDE  — write every N-th step to HDF5
+//                         (optional, default: 10)
+//   PRIM_MAX_ITER       — maximum integration steps
+//                         (optional, default: 1000000)
+//   PRIM_CHEM_TABLE     — path to primordial.h5 chemistry table
 //                         (optional, default: compile-time PRIM_CHEM_TABLE)
-//   PRIM_JLW21          — Lyman-Werner radiation intensity J_21 [10^-21
-//   erg/s/cm^2/Hz/sr]
+//   PRIM_JLW21          — Lyman-Werner radiation intensity J_21
+//                         [10^-21 erg/s/cm^2/Hz/sr]
 //                         (optional, default: 0.0 = no LW field)
 //                         Activates H2/HD photodissociation and H-
 //                         photodetachment.
-//   PRIM_ABUNDANCE_SET  — abundance preset name (optional, default: solar)
+//   PRIM_ABUNDANCE_SET  — abundance preset name
+//                         (optional, default: solar)
 //                         currently supported: solar, default
 //
 // HDF5 layout for each collapse_CR<tag>[_fret<fr>].h5
 // ─────────────────────────────────────────────────────────────────────────────
+// docs/output_schema.md is the authoritative reference; the summary below lists
+// the entries this file writes directly.
+//
 //   Attributes (root):
 //     description   — human-readable label
 //     cr_tag        — CR tag string derived from PRIM_ZETA0
 //     zeta0_cgs     — CR ionization rate [s^-1]
-//     f_ret         — free-fall retardation factor (initial value; 1.0 =
-//     standard free-fall) f_ret_table   — path to f_ret step-function table
-//     file (absent if not used) ff_collapse_mode — "gamma" when PRIM_FF_GAMMA
-//     mode is active (absent otherwise) network       — "zero_metal N_sp=23
-//     N_react=140" units_density — "cm^-3 (nH), g/cm^3 (rho)" units_cooling —
-//     "erg g^-1 s^-1" units_time    — "s" units_length  — "cm" units_B       —
-//     "G"
+//     f_ret         — free-fall retardation factor
+//                     (initial value; 1.0 = standard free-fall)
+//     f_ret_table   — path to f_ret step-function table file
+//                     (absent if not used)
+//     ff_collapse_mode — "gamma" when PRIM_FF_GAMMA mode is active
+//                     (absent otherwise)
+//     network       — "zero_metal N_sp=23 N_react=140"
+//     units_density — "cm^-3 (nH)  g/cm^3 (rho)"
+//     units_cooling — "erg g^-1 s^-1"
+//     units_time    — "s"
+//     units_length  — "cm"
+//     units_B       — "G"
 //
 //   Datasets (all 1-D length N_rows, except y):
-//     step          (N_rows,)       int32   — physical step number (multiple of
-//     100) y             (N_rows, N_sp)  float64 — species abundances (number
-//     fraction / nH)
+//     step          (N_rows,)       int32   — physical step number
+//                                             (multiple of PRIM_OUTPUT_STRIDE)
+//     y             (N_rows, N_sp)  float64 — species abundances
+//                                             (number fraction / nH)
 //                     attr "species" = "H,H2,e-,H+,H2+,H3+,H-,He,He+,He++,HeH+,
-//                                       D,HD,D+,HD+,D-,Li,LiH,Li+,Li-,LiH+,Li++,Li+++"
-//     nH           (N_rows,)       — H number density [cm^-3]
+//                                       D,HD,D+,HD+,D-,Li,LiH,Li+,Li-,LiH+,
+//                                       Li++,Li+++"
+//     nH            (N_rows,)       — H number density [cm^-3]
 //     T_K           (N_rows,)       — gas temperature [K]
 //     rho           (N_rows,)       — mass density [g cm^-3]
-//     Lambda_net     (N_rows,)       — net cooling Λ_line+Λ_cnt+Λ_chem − Γ_CR
-//     [erg g^-1 s^-1] Lambda_line    (N_rows,)       — total line cooling
-//     (H2+HD+Lya) Lambda_cnt     (N_rows,)       — continuum (dust+H ff+H2 CIA)
-//     cooling Lambda_chem      (N_rows,)       — chemical (endothermic
-//     reaction) cooling Gamma_cmp      (N_rows,)       — compressional heating
-//     p/ρ/t_eff Lambda_gas     (N_rows,)       — gas (H ff + H2 CIA) cooling
-//     subset of cnt Lambda_Lya     (N_rows,)       — Lyman-alpha cooling
-//     Lambda_H2      (N_rows,)       — H2 line cooling
-//     Lambda_HD      (N_rows,)       — HD line cooling
-//     Gamma_CR       (N_rows,)       — CR ionization heating
-//     t_ff          (N_rows,)       — true free-fall time [s]  (= t_eff /
-//     f_ret) t_cool        (N_rows,)       — cooling time e/|Λ_net| [s] t_chem
-//     (N_rows,)       — chemistry time scale [s]  min_i(y_i/|Δy_i/Δt|) tau_cnt
-//     (N_rows,)       — continuum optical depth lambda_J       (N_rows,) —
-//     Jeans length [cm] M_J           (N_rows,)       — Jeans mass [g] B_cr
-//     (N_rows,)       — critical (ambipolar) magnetic field [G] y_plus
-//     (N_rows,)       — total positive charge fraction y_minus       (N_rows,)
-//     — total negative charge fraction charge_imbal  (N_rows,)       — |y+ −
-//     y−| / (y+ + y−)
+//     Lambda_net    (N_rows,)       — net cooling Λ_line+Λ_cnt+Λ_chem − Γ_CR
+//                                     [erg g^-1 s^-1]
+//     Lambda_line   (N_rows,)       — total line cooling (H2+HD+Lya)
+//     Lambda_cnt    (N_rows,)       — continuum (dust+H ff+H2 CIA) cooling
+//     Lambda_chem   (N_rows,)       — chemical (endothermic reaction) cooling
+//     Gamma_cmp     (N_rows,)       — compressional heating p/ρ/t_eff
+//     Lambda_gas    (N_rows,)       — gas (H ff + H2 CIA) cooling,
+//                                     subset of Lambda_cnt
+//     Lambda_Lya    (N_rows,)       — Lyman-alpha cooling
+//     Lambda_H2     (N_rows,)       — H2 line cooling
+//     Lambda_HD     (N_rows,)       — HD line cooling
+//     Gamma_CR      (N_rows,)       — CR ionization heating
+//     t_ff          (N_rows,)       — true free-fall time [s]
+//                                     (= t_eff / f_ret)
+//     t_cool        (N_rows,)       — cooling time e/|Λ_net| [s]
+//     t_chem        (N_rows,)       — chemistry time scale [s]
+//                                     min_i(y_i/|Δy_i/Δt|)
+//     tau_cnt       (N_rows,)       — continuum optical depth
+//     lambda_J      (N_rows,)       — Jeans length [cm]
+//     M_J           (N_rows,)       — Jeans mass [g]
+//     B_cr          (N_rows,)       — critical (ambipolar) magnetic field [G]
+//     y_plus        (N_rows,)       — total positive charge fraction
+//     y_minus       (N_rows,)       — total negative charge fraction
+//     charge_imbal  (N_rows,)       — |y+ − y−| / (y+ + y−)
 
 #include <hdf5.h>
 
@@ -136,6 +156,9 @@ inline arche::ChemFullRates AppChemFullStep(AppCell& cell, double dt,
                                             const AppTable& tbl) {
   return arche::chem_full_step_prim_minimal(cell, dt, params, shield, tbl);
 }
+inline int AppTableNInvariants(const AppTable& tbl) {
+  return arche::prim_minimal_table_n_invariants(tbl);
+}
 constexpr const char* kNetworkLabel =
     "zero_metal_minimal N_sp=15 N_react=33 "
     "(Nakauchi2019 minimal: compact 15-species / 33-reaction network)";
@@ -171,6 +194,9 @@ inline arche::ChemFullRates AppChemFullStep(AppCell& cell, double dt,
                                             const AppTable& tbl) {
   return arche::chem_full_step_prim(cell, dt, params, shield, tbl);
 }
+inline int AppTableNInvariants(const AppTable& tbl) {
+  return arche::prim_table_n_invariants(tbl);
+}
 constexpr const char* kNetworkLabel = "zero_metal N_sp=23 N_react=140";
 constexpr const char* kOutputTag = "";
 constexpr const char* kSpeciesCsv =
@@ -198,8 +224,7 @@ using collapse_defaults::kXnHStop;
 using collapse_defaults::kItMax;
 using collapse_defaults::kOutputStride;
 
-// ─── Initial conditions / scenario defaults — from collapse_defaults.h
-// ────────
+// ─── Initial conditions / scenario defaults — from collapse_defaults.h ───────
 using collapse_defaults::kFFRet;
 using collapse_defaults::kJLW21;
 using collapse_defaults::kTK0;
@@ -211,7 +236,8 @@ using collapse_defaults::kZeta0;
 using collapse_defaults::kZred;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// OutputRow — one record (every 100 steps) buffered before writing to HDF5
+// OutputRow — one record (every PRIM_OUTPUT_STRIDE steps) buffered before
+// writing to HDF5
 // ─────────────────────────────────────────────────────────────────────────────
 struct OutputRow {
   int step;
@@ -466,6 +492,11 @@ void RunCollapse(
 
   // ── Time integration ──────────────────────────────────────────────────────
   ExitReason exit_reason = ExitReason::MaxIter;
+  collapse_driver::ConservationTally cons_tally;
+  // Read once, before the loop: this is a property of the loaded table,
+  // not of the run, and reading it through the facade the app actually
+  // uses is the point (see arche_api.h).
+  const int cons_rows = AppTableNInvariants(tbl);
   for (int it = 1; it <= max_iter; ++it) {
     if (has_fret_tab)
       collapse_driver::update_fret(fret_idx, f_ret, nH, fret_nH, fret_val);
@@ -524,6 +555,7 @@ void RunCollapse(
       exit_reason = ExitReason::SolverFailed;
       break;
     }
+    cons_tally.record(rates.conservation_projected, it, nH);
     if (bench_fp) {
       double wall_us =
           std::chrono::duration<double, std::micro>(Clock::now() - t_bench)
@@ -620,6 +652,7 @@ void RunCollapse(
   std::string exit_label = "prim collapse CR" + cr_tag;
   int exit_code = collapse_driver::report_exit(exit_reason, exit_label.c_str());
   const char* exit_msg = collapse_driver::exit_message(exit_reason);
+  collapse_driver::report_conservation(cons_tally, cons_rows);
 
   // ── Write HDF5 file ───────────────────────────────────────────────────────
   std::string h5_path = out_dir + "/collapse_CR" + cr_tag + kOutputTag;
@@ -639,6 +672,11 @@ void RunCollapse(
                 y_H2_init, y_HD_init, jlw21, fret_table_path, ff_gamma);
   H5WriteIntAttr(fid, "exit_code", exit_code);
   H5WriteStrAttr(fid, "exit_message", std::string(exit_msg));
+  if (!collapse_driver::write_conservation_attrs(fid, cons_tally, cons_rows)) {
+    std::fprintf(stderr,
+                 "ERROR: could not write the conservation attributes to %s\n",
+                 h5_path.c_str());
+  }
 #ifdef ARCHE_XRAY
   H5WriteDblAttr(fid, "zeta_X", zeta_X);
   H5WriteDblAttr(fid, "E_X_eV", E_X_eV);
@@ -912,7 +950,7 @@ int main() {
   }
 
   // ── Optional: PRIM_OUTPUT_STRIDE (write every N-th step to HDF5) ─────────
-  int output_stride = kOutputStride;  // default: 100
+  int output_stride = kOutputStride;  // default: 10
   const char* env_stride = std::getenv("PRIM_OUTPUT_STRIDE");
   if (env_stride && env_stride[0] != '\0') {
     try {
@@ -931,7 +969,7 @@ int main() {
   }
 
   // ── Optional: PRIM_MAX_ITER (maximum integration steps) ──────────────────
-  int max_iter = kItMax;  // default: 10000000
+  int max_iter = kItMax;  // default: 1000000
   const char* env_max_iter = std::getenv("PRIM_MAX_ITER");
   if (env_max_iter && env_max_iter[0] != '\0') {
     try {

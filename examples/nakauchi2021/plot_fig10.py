@@ -11,7 +11,7 @@
   style   : reduced metal Minimal (thin solid line) over full Nakauchi2021
             (thick dashed line) — overlap = agreement at a glance
 
-This is the arche-dev analogue of the paper's reduced-vs-full validation
+This is the arche analogue of the paper's reduced-vs-full validation
 figure, run as one-zone gravitational collapse up to n_H = 1e23 cm^-3.
 
 Usage (from project root, after run_fig10.sh):
@@ -75,14 +75,10 @@ def frac(d, name):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument(
-        "--h5dir",
-        default="results/nakauchi2021",
-        help="Directory containing collapse_CR*_Z*.h5",
-    )
-    ap.add_argument(
-        "--save", default="results/nakauchi2021", help="Output directory for the PNG"
-    )
+    ap.add_argument("--h5dir", default="results/nakauchi2021",
+                    help="Directory containing collapse_CR*_Z*.h5")
+    ap.add_argument("--save", default="results/nakauchi2021",
+                    help="Output directory for the PNG")
     ap.add_argument("--show", action="store_true")
     args = ap.parse_args()
 
@@ -100,16 +96,13 @@ def main():
             # Draw full as a thick dashed line first, then the reduced model as
             # a thin solid line on top: where they agree the solid line tracks
             # the dashes; where they diverge the solid line leaves the dashes.
-            for d, lw, ls, alpha, z in (
-                (dful, 2.6, "--", 0.9, 1),
-                (dmin, 1.3, "-", 1.0, 2),
-            ):
+            for d, lw, ls, alpha, z in ((dful, 2.6, "--", 0.9, 1),
+                                        (dmin, 1.3, "-", 1.0, 2)):
                 if d is None:
                     continue
                 nH = d["nH"]
-                kw = dict(
-                    color=c, lw=lw, ls=ls, alpha=alpha, zorder=z, solid_capstyle="round"
-                )
+                kw = dict(color=c, lw=lw, ls=ls, alpha=alpha, zorder=z,
+                          solid_capstyle="round")
                 # (a) temperature
                 axes[0, col].plot(nH, d["T"], **kw)
                 # (b) H2 (upper) and HD (lower)
@@ -154,53 +147,31 @@ def main():
 
     # H2 / HD annotations
     for c in range(3):
-        axes[1, c].text(
-            0.6, 0.78, r"H$_2$", transform=axes[1, c].transAxes, fontsize=10
-        )
-        axes[1, c].text(0.6, 0.22, "HD", transform=axes[1, c].transAxes, fontsize=10)
+        axes[1, c].text(0.6, 0.78, r"H$_2$", transform=axes[1, c].transAxes,
+                        fontsize=10)
+        axes[1, c].text(0.6, 0.22, "HD", transform=axes[1, c].transAxes,
+                        fontsize=10)
 
     # Legends: metallicity (colour) + network (style)
     zhandles = [
-        Line2D(
-            [0],
-            [0],
-            color=ZCOL[t],
-            lw=2,
-            label=(
-                r"$1\,Z_\odot$"
-                if t == "1e+0"
-                else rf"$10^{{{int(np.log10(zv))}}}\,Z_\odot$"
-            ),
-        )
+        Line2D([0], [0], color=ZCOL[t], lw=2,
+               label=(r"$1\,Z_\odot$" if t == "1e+0"
+                      else rf"$10^{{{int(np.log10(zv))}}}\,Z_\odot$"))
         for t, zv in ZTAGS
     ]
     nethandles = [
-        Line2D(
-            [0],
-            [0],
-            color="k",
-            lw=1.3,
-            ls="-",
-            alpha=1.0,
-            label="reduced (Minimal, 40 sp)",
-        ),
-        Line2D(
-            [0],
-            [0],
-            color="k",
-            lw=2.6,
-            ls="--",
-            alpha=0.9,
-            label="full (Nakauchi2021, 89 sp)",
-        ),
+        Line2D([0], [0], color="k", lw=1.3, ls="-", alpha=1.0,
+               label="reduced (Minimal, 40 sp)"),
+        Line2D([0], [0], color="k", lw=2.6, ls="--", alpha=0.9,
+               label="full (Nakauchi2021, 89 sp)"),
     ]
-    axes[0, 0].legend(
-        handles=zhandles, fontsize=7.5, ncol=2, loc="lower right", framealpha=0.9
-    )
-    axes[0, 2].legend(handles=nethandles, fontsize=8, loc="lower right", framealpha=0.9)
+    axes[0, 0].legend(handles=zhandles, fontsize=7.5, ncol=2,
+                      loc="lower right", framealpha=0.9)
+    axes[0, 2].legend(handles=nethandles, fontsize=8, loc="lower right",
+                      framealpha=0.9)
 
     fig.suptitle(
-        "Reproduction of Nakauchi et al. (2021) Figure 10 — arche-dev metal "
+        "Reproduction of Nakauchi et al. (2021) Figure 10 — arche metal "
         "network\nreduced metal Minimal (thin solid line) vs full Nakauchi2021 "
         r"(thick dashed line); one-zone collapse to "
         r"$n_{\rm H}=10^{23}\,{\rm cm^{-3}}$",

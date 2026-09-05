@@ -13,63 +13,36 @@
 #include <cmath>
 
 #include "kinetics/rates.h"  // detail::eval_opacity (k_prm)
+#include "thermo/h2_thermodynamics.h"
 
 namespace arche {
 
 // ─────────────────────────────────────────────────────────────────────────────
-// c_H2 — internal degrees-of-freedom factor for H2: returns 1/(γ-1)
-//   c_H2 = 3/2 + c_rot + c_vib
-//   Used in γ calculation: γ = 1 + (1+4yHe) / [mu * (1.5*(atoms) + c_H2*y_H2)]
+// c_H2 — compatibility entry point for the H2 EOS factor.
+//
+// The implementation belongs to thermo so the EOS layer does not depend on
+// cooling.  Keep this wrapper while existing cooling and solver callers use
+// arche::c_H2().
 // ─────────────────────────────────────────────────────────────────────────────
-inline double c_H2(double T_K) {
-  double c_rot;
-  if (T_K > 1.0e3) {
-    c_rot = 1.0;
-  } else {
-    constexpr double eps = 1.0e-3;
-    const double T_b = (1.0 - eps) * T_K;
-    const double T_f = (1.0 + eps) * T_K;
-    double Zp_b = 0, Zp_f = 0, Xp_b = 0, Xp_f = 0;
-    double Zo_b = 0, Zo_f = 0, Xo_b = 0, Xo_f = 0;
-    for (int K = 0; K <= 20; ++K) {
-      double E = 85.4 * static_cast<double>(K * (K + 1));
-      double wb = static_cast<double>(2 * K + 1) * std::exp(-E / T_b);
-      double wf = static_cast<double>(2 * K + 1) * std::exp(-E / T_f);
-      if (K % 2 == 0) {
-        Zp_b += wb;
-        Zp_f += wf;
-        Xp_b += E * wb;
-        Xp_f += E * wf;
-      } else {
-        Zo_b += wb;
-        Zo_f += wf;
-        Xo_b += E * wb;
-        Xo_f += E * wf;
-      }
-    }
-    double Erot_f = 0.25 * (Xp_f / Zp_f) + 0.75 * (Xo_f / Zo_f);
-    double Erot_b = 0.25 * (Xp_b / Zp_b) + 0.75 * (Xo_b / Zo_b);
-    c_rot = (Erot_f - Erot_b) / (2.0 * eps * T_K);
-  }
-  double x = 6.1e3 / T_K;
-  double ex = std::exp(x);
-  double c_vib = (x > 1.0e2) ? 0.0 : (x * x * ex) / ((ex - 1.0) * (ex - 1.0));
-  return 1.5 + c_rot + c_vib;
-}
+inline double c_H2(double T_K) { return thermo::c_H2(T_K); }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // fesc_H2 — H2 line escape fraction (fitting formula)
+//   alpha(T): Fukushima, Omukai & Hosokawa (2018), MNRAS 473, 4754
+//   (arXiv:1710.00470), Appendix B Eqs. (B2)-(B4); coefficients verified
+//   digit-for-digit against the paper. Block splits (996.07 K, 4001.70 K)
+//   are the alpha fit crossings, C0-continuous; coefficients unchanged.
 // ─────────────────────────────────────────────────────────────────────────────
 inline double fesc_H2(double Nc_H2, double T_K) {
   double a0, a1, a2, a3, a4, a5;
-  if (T_K < 1.0e3) {
+  if (T_K < 9.9607e2) {
     a0 = 0.978382;
     a1 = 3.99572e-4;
     a2 = -1.73108e-6;
     a3 = 1.15363e-9;
     a4 = 8.24607e-13;
     a5 = -7.65975e-16;
-  } else if (T_K < 4.0e3) {
+  } else if (T_K < 4.0017e3) {
     a0 = 0.827472;
     a1 = 1.07697e-4;
     a2 = -8.25123e-8;
@@ -98,8 +71,9 @@ inline double fesc_H2(double Nc_H2, double T_K) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // h2_cooling — H2 line cooling rate [erg g⁻¹ s⁻¹]
-//   Low-density rates: Glover & Abel (2008)
-//   LTE limit:        Glover (2015) Eq. 30
+//   Low-density rates: GA08 (H2-H, H2-H2, H2-He); Glover (2015) Paper I (H2-e, H2-H+)
+//   LTE limit:        Glover (2015) Paper II Eq. 30 (attributed therein to
+//                      Glover 2011, Habilitation thesis, Univ. Heidelberg)
 //
 //   y_a  = y[Sp::H]  (H atoms)
 //   y_m  = y[Sp::H2]  (H2)
@@ -114,10 +88,14 @@ inline double h2_cooling(double nH, double T_K, double rho, double y_a,
   const double lgT3 = std::log10(T3);
 
   // Fixed reference log10 values for clamping
-  constexpr double lgT1 = -2.0;          // log10(10/1000)
-  constexpr double lgT2 = -1.0;          // log10(100/1000)
-  constexpr double lgT4 = 1.0;           // log10(10000/1000)
-  constexpr double lgT6 = 0.7781512504;  // log10(6000/1000)
+  constexpr double lgT1 = -2.0;  // log10(10/1000)
+  constexpr double lgT2 = -1.0;  // log10(100/1000)
+  constexpr double lgT4 = 1.0;   // log10(10000/1000)
+  // log10(6000/1000) = log10(6.0); std::log10 is not a valid constexpr
+  // initializer under C++17/clang-22 (verified), so the full-precision
+  // literal is used. Replaces the previously truncated 0.7781512504
+  // (1.64e-11 off), which caused spurious ~1e-11 dex steps at T=6000 K.
+  constexpr double lgT6 = 0.7781512503836436;
 
   // Horner-form polynomial evaluation
   auto poly5 = [](double x, double a0, double a1, double a2, double a3,
@@ -134,9 +112,15 @@ inline double h2_cooling(double nH, double T_K, double rho, double y_a,
                           x * (a4 + x * (a5 + x * (a6 + x * (a7 + x * a8)))))));
   };
 
-  // ── H2–H collision (Glover & Abel 2008) ──────────────────────────────────
+  // H2-H de-excitation coefficient — Glover & Abel (2008) Table (3:1 ortho:para).
+  // GA08's published table is DISCONTINUOUS at its own interval boundary: the
+  // 10-100 K and 100-1000 K sub-fits jump -8.478% at 100 K (this is in the
+  // published table, not a transcription error). To remove the representable step
+  // in Lambda_net, the changeover is set to 115.47 K, where the two GA08 sub-fits
+  // cross (C0-continuous). This extends GA08's 10-100 K fit ~15 K above its stated
+  // top; coefficients are unchanged.
   double L0_H2_H;
-  if (T_K < 1.0e2) {
+  if (T_K < 1.154726e2) {
     double t = (T_K < 1.0e1) ? lgT1 : lgT3;  // T<10: clamp at T=10K
     L0_H2_H = std::pow(10.0, poly5(t, -16.818342, 37.383713, 58.145166,
                                    48.656103, 20.159831, 3.8479610));
@@ -167,7 +151,7 @@ inline double h2_cooling(double nH, double T_K, double rho, double y_a,
                                     0.29036281, -0.16596184, 0.19191375));
   }
 
-  // ── H2–H+ collision (Glover 2015) ────────────────────────────────────────
+  // ── H2–H+ collision (Glover 2015 Paper I, Eq. (16)/(A3)) ─────────────────
   double L0_H2_Hp;
   {
     double t = (T_K < 1.0e1) ? lgT1 : (T_K <= 1.0e4) ? lgT3 : lgT4;
@@ -175,14 +159,19 @@ inline double h2_cooling(double nH, double T_K, double rho, double y_a,
                                     -0.23619985, -0.51002221, 0.32168730));
   }
 
-  // ── H2–e collision (Glover & Abel 2008, 9-coefficient polynomial) ────────
+  // H2-e de-excitation coefficient — composite fit (C0-continuous by construction):
+  //   T < 80.86 K      : Glover & Abel (2008), e- 6-coeff fit      (arXiv:0803.1768)
+  //   80.86 - 501.86 K : Glover (2015) Paper I Eq.(14)             (arXiv:1501.05960)
+  //   > 501.86 K       : Glover (2015) Paper I Eq.(15)
+  // Changeover temperatures are the fit crossings (80.86 K, 501.86 K) so each join
+  // is continuous; the polynomial coefficients are unchanged from the two papers.
   double L0_H2_e;
-  if (T_K < 1.5e2) {
+  if (T_K < 8.086e1) {
     double t = (T_K < 1.0e1) ? lgT1 : lgT3;  // T<10: clamp at T=10K
     L0_H2_e =
         std::pow(10.0, poly8(t, -34.286155, -48.537163, -77.121176, -51.352459,
                              -15.169160, -0.98120322, 0.0, 0.0, 0.0));
-  } else if (T_K <= 5.0e2) {
+  } else if (T_K <= 5.0186e2) {
     L0_H2_e = std::pow(
         10.0, poly8(lgT3, -21.928796, 16.815730, 96.743155, 343.19180,
                     734.71651, 983.67576, 801.81247, 364.14446, 70.609154));
@@ -223,10 +212,15 @@ inline double h2_cooling(double nH, double T_K, double rho, double y_a,
 
 // ─────────────────────────────────────────────────────────────────────────────
 // fesc_HD — HD line escape fraction (fitting formula)
+//   alpha(T): Nakauchi, Omukai & Susa (2019), MNRAS 488, 1846
+//   (arXiv:1904.08336), per the arche author's attribution; NOT independently
+//   verified against the typeset paper (arXiv v1 has no appendix) -- confirm
+//   against the typeset paper. Block split (951.64 K) is the alpha fit
+//   crossing, C0-continuous; coefficients unchanged.
 // ─────────────────────────────────────────────────────────────────────────────
 inline double fesc_HD(double Nc_HD, double T_K) {
   double a0, a1, a2, a3, a4, a5;
-  if (T_K < 1.0e3) {
+  if (T_K < 9.5164e2) {
     a0 = 1.02339;
     a1 = -9.04450e-4;
     a2 = 3.26141e-6;
@@ -305,11 +299,11 @@ inline double hd_cooling(double nH, double T_K, double rho, double y_HD,
 //   Subtracts CMB background contribution (evaluated at T_rad)
 //
 //   Species are addressed through the caller-supplied Sp enum (the model's own
-//   index space): y[Sp::H], y[Sp::H2], y[Sp::e], y[Sp::Hp], y[Sp::He],
-//   y[Sp::HD]. This matters because the compact Nakauchi2019_Minimal lays HD at
-//   a different local index (10) than the full/metal networks (12); using the
-//   model's Sp keeps every model's HD/H2 cooling correct (full/metal stay
-//   bit-for-bit since their indices are unchanged).
+//   index space): y[Sp::H], y[Sp::H2], y[Sp::e], y[Sp::Hp], y[Sp::He], y[Sp::HD].
+//   This matters because the compact Nakauchi2019_Minimal lays HD at a different
+//   local index (10) than the full/metal networks (12); using the model's Sp
+//   keeps every model's HD/H2 cooling correct (full/metal stay bit-for-bit since
+//   their indices are unchanged).
 // ─────────────────────────────────────────────────────────────────────────────
 template <class Sp, int N_sp>
 void line_cool(const std::array<double, N_sp>& y, double Nc_H2, double Nc_HD,

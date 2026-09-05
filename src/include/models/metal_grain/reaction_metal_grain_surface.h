@@ -28,8 +28,8 @@
 #include <array>
 #include <cmath>
 
-#include "cooling/grain.h"       // vol_gr()
 #include "core/species_index.h"  // metal_grain::Species, SpId, make_mass_array
+#include "cooling/grain.h"       // vol_gr()
 
 namespace arche {
 

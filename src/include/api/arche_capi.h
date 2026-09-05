@@ -81,6 +81,12 @@ typedef struct {
   double k_gas, k_gr;                                       // opacities
   double T_gr_K;                                            // solved grain temp
   int solver_failed;  // 0 = ok, 1 = failed
+  // 0 = element/charge conservation was NOT enforced on this step, 1 = it was.
+  // See ChemFullRates::conservation_projected in core/state.h for the four
+  // reasons a 0 appears.  All four shipped networks register invariant rows
+  // (5 / 5 / 8 / 10), so the "no rows registered" reason does not apply to
+  // them: on a step that converged, a 0 means the projection itself declined.
+  int conservation_projected;
 } ArcheChemFullRates;
 
 // ── Struct initialisers ─────────────────────────────────────────────────────
@@ -207,6 +213,19 @@ void arche_model_cell_set_scalars(ArcheModelCell* cell, double nH, double T_K,
                                   double mu, double gamma);
 void arche_model_cell_get_scalars(const ArcheModelCell* cell, double* nH,
                                   double* T_K, double* mu, double* gamma);
+
+// Reset only integration history; visible state is unchanged. No-op on NULL.
+void arche_model_cell_reset(ArcheModelCell* cell);
+
+// Read-only thermodynamic maps over the current composition. mu is in proton-
+// mass units, gamma is dimensionless, T_K is [K], and e_cgs is [erg g^-1].
+// Each query returns a quiet NaN when cell is NULL. T_from_e also propagates a
+// NaN e_cgs input. gamma_from_y returns quiet NaN unless T_K is positive and
+// finite. e(T) is monotone over the search bracket, so T_from_e returns the
+// unique root; see arche_api.h for the bracket and its measured accuracy.
+double arche_model_mu_from_y(const ArcheModelCell* cell);
+double arche_model_gamma_from_y(const ArcheModelCell* cell, double T_K);
+double arche_model_T_from_e(const ArcheModelCell* cell, double e_cgs);
 
 // Advance one cell by dt. Returns ARCHE_OK or an ARCHE_ERR_* code; on success
 // the cooling/heating breakdown is written to *out (out may be NULL).  The

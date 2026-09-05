@@ -58,7 +58,9 @@ Only the lightweight facade headers are installed — the closure reachable from
 `api/arche_api.h` (`-> core/state.h -> core/species_index.h -> core/species_catalog.h`)
 plus the standalone `api/arche_capi.h`. The
 Eigen/HDF5-dependent kernel headers (`solve/chemistry.h`, `core/newton.h`,
-`kinetics/topology.h`, …) are intentionally **not** shipped, preserving the
+`kinetics/topology.h`, …), and the internal `thermo/*.h` EOS headers are
+intentionally **not** shipped. Use the facade thermodynamic query functions;
+do not include internal EOS headers. This preserves the
 "no Eigen/HDF5 in your own sources" contract for installed consumers.
 
 Set `-DARCHE_INSTALL=OFF` to skip generating these rules.
@@ -241,6 +243,49 @@ The C++ equivalent (`arche_api.h`) is `model_create` / `model_n_species` /
 `model_species` / `model_cell_create` / `model_cell_y` / `model_step`, with
 `ModelRuntimePtr` / `ModelCellPtr` RAII wrappers. This layer is additive: the
 per-model entries and the `Model`-enum dispatch above are unchanged.
+
+### Reusing registry cells and mapping thermodynamics
+
+One registry `ModelCell` may be pooled per thread. Before loading an unrelated
+fluid/grid cell into that scratch object, call `model_cell_reset()` (C:
+`arche_model_cell_reset()`). It clears the hidden reaction cache,
+conservation-projection carry, and metal line-escape warm starts while leaving
+`y[]`, `nH`, `T_K`, `mu`, and `gamma` unchanged. Do not reset between
+consecutive substeps of the same physical cell.
+
+```cpp
+ModelCellPtr scratch = model_cell_create_owned(*model);  // one per thread
+for (FluidCell& fluid : local_cells) {
+  model_cell_reset(*scratch);
+  copy_into_arche(fluid, *scratch);
+  ChemFullRates rates = model_step(*model, *scratch, dt, params, shielding);
+  copy_from_arche(*scratch, rates, fluid);
+}
+```
+
+The same registry layer provides read-only composition-to-EOS maps:
+
+```cpp
+double mu = model_mu_from_y(*scratch);                    // [m_p]
+double gamma = model_gamma_from_y(*scratch, fluid.T_K);  // dimensionless
+double T_K = model_T_from_e(*scratch, fluid.e_cgs);      // K; e in erg g^-1
+```
+
+They do not modify stored cell values. `mu` and `gamma` use the same internal
+EOS implementation and operation order as the chemistry kernel for identical
+`y,T`; that implementation is private and is not an installed extension API.
+`gamma` requires a positive finite temperature and returns quiet NaN otherwise.
+The energy inverse searches `[1, 10^12] K`, clamps finite out-of-range energies
+to those endpoints, propagates a NaN energy, and uses
+`e = k_B T [1.5 S_atoms + c_H2(T)y_H2] / [(1+4yHe)m_p]`. `c_H2()` is continuous
+across `1000 K` — the classical-rotation branch is gone, leaving a `2.2e-14`
+relative step from the change in the number of summed rotational states — so
+`e(T)` is monotone over the bracket and the returned root is unique.
+Deterministic log-space bisection selects it. Measured round trips on
+H₂-dominated compositions stay within `1.1e-11` in relative temperature over
+the whole bracket (worst near `1.4 K`), and within `1.5e-12` for `T ≥ 10 K`.
+The C query functions return quiet NaN for a NULL cell; the C reset function
+treats NULL as a no-op.
 
 ## Linking by hand (non-CMake)
 

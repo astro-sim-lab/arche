@@ -6,10 +6,10 @@
 #include <array>
 #include <cmath>
 
+#include "kinetics/reaction_index.h"
 #include "core/state.h"
 #include "kinetics/partition_function.h"
 #include "kinetics/rates.h"
-#include "kinetics/reaction_index.h"
 #include "kinetics/topology.h"
 #include "model_traits.h"
 #include "models/metal_grain/partition_function_metal.h"
@@ -80,6 +80,7 @@ void compute_base_rates(double nH, double T_K, double mu,
     std::array<double, N_sp + 3> pf;
     pf_prim::eval_pf_set<typename Model::Species, N_react>(T_K, tbl, pf);
 
+    // clang-format off
     // Forward: compact slot -> canonical law (slot order = network keep-set).
     k_rxn[0] = rl::r1_Hp_rec_caseB(cc);       // num 2:   e- + H+  -> H + γ
     k_rxn[1] = rl::r6_H_e_to_Hm(cc);          // num 7:   H + e-   -> H- + γ
@@ -103,17 +104,16 @@ void compute_base_rates(double nH, double T_K, double mu,
     k_rxn[18] =
         rl::r129_H2_Li_to_H2_e_Lip(cc, tbl.reactions[18].delE);  // num 130
     // He+ / ion-processing reactions (appended; thermal He+ via id 4 reverse).
-    k_rxn[19] =
-        rl::r3_Hep_rec<RateForm::Primordial>(cc);  // num 4:  He+ + e- -> He + γ
-    k_rxn[20] = rl::r14_Hm_Hp_to_2H<RateForm::Primordial>(
-        cc);                              // num 15: H+ + H-  -> 2H
-    k_rxn[21] = rl::r16_H2p_e_to_2H(cc);  // num 17: e- + H2+ -> 2H
-    k_rxn[22] =
-        rl::r23_Hep_H2_to_Hp_H_He(cc);     // num 24: He+ + H2 -> H+ + H + He
-    k_rxn[23] = rl::r37_Hm_H_to_2H_e(cc);  // num 38: H- + H   -> 2H + e-
+    k_rxn[19] = rl::r3_Hep_rec<RateForm::Primordial>(cc);  // num 4:  He+ + e- -> He + γ
+    k_rxn[20] =
+        rl::r14_Hm_Hp_to_2H<RateForm::Primordial>(cc);  // num 15: H+ + H-  -> 2H
+    k_rxn[21] = rl::r16_H2p_e_to_2H(cc);          // num 17: e- + H2+ -> 2H
+    k_rxn[22] = rl::r23_Hep_H2_to_Hp_H_He(cc);    // num 24: He+ + H2 -> H+ + H + He
+    k_rxn[23] = rl::r37_Hm_H_to_2H_e(cc);         // num 38: H- + H   -> 2H + e-
 
     // Cosmic-ray channels (compact slots 24..32 = full ids 131..139), emitted
     // at the compact CR-block head; zero when params.zeta == 0.
+    // clang-format on
     compute_CR_rates_prim<N_react>(k_rxn, params.zeta,
                                    zero_metal_minimal::loop::n_std);
 
@@ -147,9 +147,9 @@ void compute_base_rates(double nH, double T_K, double mu,
   //    reactions out of the full k_rxn by num and writes them into the compact
   //    slots, using the full PF-loaded table the runtime owns alongside the
   //    compact table.  That table is supplied when the compact metal runtime is
-  //    constructed (rate-gather phase); falling through to the full-network
-  //    path below would index k_rxn slots far outside the compact stride, so
-  //    this path is guarded until the gather is wired. ──
+  //    constructed (rate-gather phase); falling through to the full-network path
+  //    below would index k_rxn slots far outside the compact stride, so this
+  //    path is guarded until the gather is wired. ──
   if constexpr (Model::is_compact_metal) {
     // Run the full metal_grain coefficient kernel on the runtime-owned full
     // table, then gather the kept reactions into the compact slots.  The full

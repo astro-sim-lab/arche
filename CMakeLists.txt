@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18)
-project(arche VERSION 1.0.0 LANGUAGES C CXX)
+project(arche VERSION 1.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -22,12 +22,23 @@ find_package(HDF5 REQUIRED COMPONENTS C)
 # instead of re-instantiating the templates, and an external app can drive the
 # network via api/arche_api.h alone (no Eigen/HDF5 in its own sources).
 #
+# Thermo inversion implementations intentionally remain separate translation
+# units for numerical reproducibility. Moving them into arche_api.cc changes
+# the large unit's optimization budget and can alter ULP-level code generation
+# for its inline-template COMDAT definitions (including metal line cooling),
+# affecting existing linked applications.  LTO/IPO removes this isolation and
+# restores that code-generation coupling.
+#
 # The target is named `arche` (artefact libarche.a) and is also exposed as the
 # namespaced alias `arche::arche`, which is the name external consumers should
 # link (via add_subdirectory / FetchContent). The `::` makes CMake treat it as a
 # target and error early on a typo. All usage requirements are PUBLIC so they
 # apply both to libarche's own compilation and to every consumer.
-add_library(arche STATIC src/lib/arche_api.cc src/lib/arche_capi.cc)
+add_library(arche STATIC
+    src/lib/arche_api.cc
+    src/lib/arche_capi.cc
+    src/thermo/eos.cc
+)
 add_library(arche::arche ALIAS arche)
 # Compile the static archive as position-independent code.  Modern toolchains
 # link executables as PIE by default, and consumers may embed libarche into a
@@ -54,16 +65,22 @@ target_compile_options(arche PUBLIC
         $<$<CXX_COMPILER_ID:IntelLLVM>: -xHost -fp-model=precise>
     >
 )
+# Warnings are PRIVATE: they apply to libarche's own translation units and are
+# not forced on projects that link arche::arche.
+target_compile_options(arche PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang,IntelLLVM>: -Wall -Wextra>
+)
 
 # --- install / export (find_package(arche)) ---
-# Only the lightweight public-facade headers are installed (the closure reachable
-# from api/arche_api.h / api/arche_capi.h): api/arche_api.h -> core/state.h ->
-# core/species_index.h -> core/species_catalog.h, plus the standalone C ABI
-# api/arche_capi.h. The Eigen/HDF5-
-# dependent kernel headers (solve/chemistry.h, solve/chemreact.h,
-# kinetics/topology.h, ...) and the internal rate-kernel bookkeeping
-# (kinetics/reaction_index.h) are deliberately NOT shipped, so an installed
-# consumer keeps the same "no Eigen/HDF5 in your own sources" contract.
+# Only the lightweight public-facade headers are installed (the closure
+# reachable from api/arche_api.h / api/arche_capi.h): api/arche_api.h ->
+# core/state.h -> core/species_index.h -> core/species_catalog.h, plus the
+# standalone C ABI api/arche_capi.h.  The Eigen/HDF5-dependent kernel headers
+# (solve/chemistry.h, solve/chemreact.h, kinetics/topology.h, ...), internal
+# thermo headers (thermo/eos.h, thermo/h2_thermodynamics.h), and internal
+# rate-kernel bookkeeping (kinetics/reaction_index.h) are deliberately NOT
+# shipped.  Installed consumers use only the facade thermo queries and retain
+# the "no Eigen/HDF5 in your own sources" contract.
 option(ARCHE_INSTALL "Generate install/export rules for libarche (find_package(arche))" ON)
 if(ARCHE_INSTALL)
     include(CMakePackageConfigHelpers)

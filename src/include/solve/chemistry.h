@@ -56,12 +56,13 @@
 #include "cooling/cooling_molecular.h"  // line_cool_metal, LineCoolRates, EscapeState
 #include "core/state.h"  // ChemState, ChemParams, ChemRates, ChemShielding,
 #include "kinetics/topology.h"  // ReactionTable + load_pf_tables_h5
+#include "solve/chemreact.h"  // chemreact, chemcool, compute_chemistry_cooling
+#include "solve/conservation.h"  // conservation::project / fill_invariants
 #include "models/metal_grain/equilibrium.h"  // equichem_metal; pulls in rates.h
 #include "models/metal_grain/reactions.h"    // metal_grain::net::init_topology
 #include "models/primordial/equilibrium.h"   // equichem, equichem_minimal
 #include "models/primordial/reactions.h"     // zero_metal::net::init_topology
-#include "solve/chemreact.h"  // chemreact, chemcool, compute_chemistry_cooling
-                              // ChemFullRates, phys::
+                                             // ChemFullRates, phys::
 #include "kinetics/reaction_index.h"  // zero_metal::, metal_grain:: constants
 #include "model_traits.h"             // Nakauchi2019, Nakauchi2021
 #ifdef ARCHE_XRAY
@@ -100,8 +101,20 @@ struct ChemCell {
   ChemState<Model::N_sp> state{};
   std::array<double, 2 * Model::N_react> var{};
   std::conditional_t<Model::has_escape, EscapeState, Empty> es{};
+  // Sub-ulp remainder of the element-conservation projection, one entry per
+  // invariant row (solve/conservation.h).  Cleared with var: it belongs to the
+  // integration history of this cell, not to its physical state.
+  // Because it is history and not state, restoring a saved ChemState does NOT
+  // restore it, and a caller that reuses one ChemCell as scratch across many
+  // fluid cells carries the previous cell's remainder into the next cell's
+  // first step.  Call reset_var() between cells; the un-reset error is bounded
+  // by half an ulp of the element total.
+  std::array<double, conservation::kMaxRows> cons_carry{};
 
-  void reset_var() noexcept { var.fill(0.0); }
+  void reset_var() noexcept {
+    var.fill(0.0);
+    cons_carry.fill(0.0);
+  }
 };
 
 // Convenience aliases matching the two supported networks
@@ -128,8 +141,22 @@ ChemRates chem_step(ChemCell<Model>& cell, double dt, const ChemParams& params,
     }
   }
 
+  const std::array<double, Model::N_sp> y_in = cell.state.y;
   auto r = chemcool<Model>(cell.state.nH, cell.state.T_K, cell.state.y, dt,
                            cell.var, tbl, params);
+  // Restore the network's linear invariants (elements + charge), which the
+  // in-place  y[i] += ddy[i]  of the Newton update perturbs at ulp(y[i]).
+  // Skipped on a non-converged step, matching chem_full_step(), which returns
+  // before its own projection in that case.  chemreact() rolls a diverged step
+  // back to y_init, so the element increments are then exactly zero -- but the
+  // charge row's target is ABSOLUTE, so projecting anyway would neutralise the
+  // caller's own rolled-back state and report conservation_projected = true for
+  // a step that computed nothing.
+  const bool projected =
+      r.converged &&
+      conservation::project<Model::N_sp>(
+          tbl.invariants.data(), tbl.n_invariants, tbl.charge_invariant_row,
+          y_in, cell.state.y, cell.cons_carry);
   cell.state.mu = r.mu;
   cell.state.gamma = r.gamma;
   const double Lambda_chem = r.Lambda_chem;
@@ -143,7 +170,7 @@ ChemRates chem_step(ChemCell<Model>& cell, double dt, const ChemParams& params,
   double Gamma_CR =
       3.4 * phys::eV_to_erg * rate_CR / ((1.0 + 4.0 * yHe) * phys::m_p);
 
-  return ChemRates{Lambda_chem, Gamma_CR};
+  return ChemRates{Lambda_chem, Gamma_CR, 0.0, projected};
 }
 
 // ---------------------------------------------------------------------------
@@ -158,7 +185,6 @@ ChemFullRates chem_full_step(
     const ChemShielding& shield,
     const ReactionTable<Model::N_sp, Model::N_react>& tbl) {
   constexpr int N_sp = Model::N_sp;
-  constexpr int N_react = Model::N_react;
   using Sp = typename Model::Sp;  // model-specific species names: y[Sp::H] etc.
 
   if (!std::isfinite(params.T_rad) || params.T_rad <= 0.0) {
@@ -233,6 +259,9 @@ ChemFullRates chem_full_step(
   rates.T_gr_K = p.T_gr_K;  // export solved grain temperature to the caller
 
   // ── Chemistry ─────────────────────────────────────────────────────────────
+  // Abundances entering the implicit solve.  Nothing above this line touches
+  // cell.state.y, so this is also the state the caller handed in.
+  const std::array<double, N_sp> y_in = cell.state.y;
   double Lambda_ch = 0.0;
 #ifdef ARCHE_SUBCYCLE
   {
@@ -287,6 +316,16 @@ ChemFullRates chem_full_step(
   Lambda_ch = r.Lambda_chem;
 #endif
   rates.Lambda_chem = Lambda_ch;
+
+  // ── Element / charge conservation ─────────────────────────────────────────
+  // The Newton increment dy is conservative to ~1e-18 of the element total, but
+  // applying it as  y[i] += ddy[i]  rounds at ulp(y[i]), and species sharing an
+  // element differ in ulp by many decades, so the element totals drift.  Undo
+  // that here, before the operator-split channels below, whose stoichiometry is
+  // outside the reaction table this projection is derived from.
+  rates.conservation_projected = conservation::project<N_sp>(
+      tbl.invariants.data(), tbl.n_invariants, tbl.charge_invariant_row, y_in,
+      cell.state.y, cell.cons_carry);
 
   // ── Lyman-Werner photodissociation (operator-split) ───────────────────────
   if (shield.J_LW21 > 0.0) {
@@ -441,6 +480,9 @@ inline ZeroMetalTable make_zero_metal_table(
   ZeroMetalTable tbl;
   zero_metal::net::init_topology(tbl);      // reaction topology from C++ source
   load_pf_tables_h5(tbl, prim_chem_table);  // partition functions from HDF5
+  // Element/charge rows for the conservation projection, verified against the
+  // topology just loaded (solve/conservation.h).
+  conservation::fill_invariants<zero_metal::Species>(tbl);
   return tbl;
 }
 
@@ -462,6 +504,7 @@ inline zero_metal_minimal::MinimalTable make_minimal_table(
         zero_metal::Species::local(zero_metal_minimal::Species::canonical(i));
     tbl.pf_table[i] = full_tmp.pf_table[full_i];
   }
+  conservation::fill_invariants<zero_metal_minimal::Species>(tbl);
   return tbl;
 }
 
@@ -473,6 +516,11 @@ inline MetalGrainTable make_metal_grain_table(
   MetalGrainTable tbl;
   metal_grain::net::init_topology(tbl);  // reaction topology from C++ source
   load_pf_tables_h5(tbl, metal_chem_table);  // partition functions from HDF5
+  // Element/charge rows for the conservation projection, verified against the
+  // topology just loaded (solve/conservation.h).  core/species_composition.h
+  // registers all 89 catalog species, so the rows are derived and checked
+  // rather than skipped.
+  conservation::fill_invariants<metal_grain::Species>(tbl);
   return tbl;
 }
 
@@ -492,6 +540,7 @@ inline metal_grain_minimal::MinimalTable make_metal_minimal_table(
     tbl.pf_table[i] = full.pf_table[metal_grain::Species::local(
         metal_grain_minimal::Species::canonical(i))];
   tbl.aux_full_metal = std::make_shared<MetalGrainTable>(full);
+  conservation::fill_invariants<metal_grain_minimal::Species>(tbl);
   return tbl;
 }
 

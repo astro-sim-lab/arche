@@ -28,9 +28,8 @@ constexpr double kSigmaB = arche::phys::sigma_B;  // [erg cm^-2 s^-1 K^-4]
 // ─── CMB ─────────────────────────────────────────────────────────────────────
 constexpr double kTCMB0 = 2.725;  // CMB temperature at z=0 [K]
 
-// ─── CR attenuation
-// ─────────────────────────────────────────────────────────── Primary
-// attenuation column density [g cm^-2]
+// ─── CR attenuation ──────────────────────────────────────────────────────────
+// Primary attenuation column density [g cm^-2]
 constexpr double kCrAttenuColDens = 96.0;
 
 // ─── Integration control defaults ────────────────────────────────────────────
@@ -44,19 +43,14 @@ constexpr int kNInitSteps = 10;      // number of initial short-timestep steps
 constexpr double kXnHStop = 1.0e23;  // density ceiling [cm^-3]
 constexpr double kTHighStop =
     1.0e5;  // temperature ceiling (validated T_max) [K]
-// HDF5 output stride: write every N-th step.
-// Unified to 10 (formerly prim=100, metal=10).
+// HDF5 output stride: write every N-th step.  Shared by both models.
 constexpr int kOutputStride = 10;
-// Maximum integration steps before MaxIter exit.
-// Unified to 1e6 (formerly prim=10000000, metal=1000000).
+// Maximum integration steps before MaxIter exit.  Shared by both models.
 constexpr int kItMax = 1000000;
 
-// ─── Initial conditions / scenario defaults
-// ─────────────────────────────────── (overridable at runtime via environment
-// variables)
-constexpr double kXnH0 =
-    0.1;  // initial H number density [cm^-3]
-          // (formerly metal default was 1.0; unified to prim value)
+// ─── Initial conditions / scenario defaults ──────────────────────────────────
+// (overridable at runtime via environment variables)
+constexpr double kXnH0 = 0.1;     // initial H number density [cm^-3]
 constexpr double kTK0 = 1.0e2;    // initial gas temperature [K]
 constexpr double kYe0 = 1.0e-4;   // initial electron / H+ fraction
 constexpr double kYH2 = 6.0e-7;   // initial H2 fraction
@@ -73,18 +67,17 @@ constexpr double kZmetal = 0.0;  // metallicity [Z_sun] (metal_grain only)
 // dt is halved up to kSubcycleMaxLevel times (2^6 = 64 sub-steps at most).
 constexpr int kSubcycleMaxLevel = 6;
 
-// ─── ExitReason
-// ─────────────────────────────────────────────────────────────── Categorises
-// why the time integration loop terminated. exit_code values written to stdout
-// and HDF5 attributes match enum order. SolverFailed is always defined (even
-// without ARCHE_SUBCYCLE) to keep enum values stable across build
-// configurations.
+// ─── ExitReason ──────────────────────────────────────────────────────────────
+// Categorises why the time integration loop terminated.  exit_code values
+// written to stdout and HDF5 attributes match enum order.  SolverFailed is
+// always defined (even without ARCHE_SUBCYCLE) to keep enum values stable
+// across build configurations.
 enum class ExitReason {
-  Normal,     // 0: nH >= kXnHStop     (density ceiling reached — expected end)
-  MaxIter,    // 1: it  >  max_iter     (step limit hit before density ceiling)
-  HighTemp,   // 2: T_K > kTHighStop    (T ceiling reached — expected end)
-  NegEnergy,  // 3: e  <= 0             (internal energy went non-positive)
-  NonFinite,  // 4: NaN/Inf in nH or T_K
+  Normal,    // 0: nH >= kXnHStop     (density ceiling reached — expected end)
+  MaxIter,   // 1: it  >  max_iter     (step limit hit before density ceiling)
+  HighTemp,  // 2: T_K > kTHighStop    (T ceiling reached — expected end)
+  NegEnergy,     // 3: e  <= 0             (internal energy went non-positive)
+  NonFinite,     // 4: NaN/Inf in nH or T_K
   SolverFailed,  // 5: subcycle max depth exceeded without NR convergence
                  // (ARCHE_SUBCYCLE)
 };

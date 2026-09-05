@@ -182,6 +182,28 @@ MetalMinimalTable* load_metal_minimal_table(const std::string& h5_path);
 void metal_minimal_table_destroy(MetalMinimalTable* tbl) noexcept;
 
 // ---------------------------------------------------------------------------
+// Invariant-row count of a loaded table (see solve/conservation.h).
+//
+// Returns the number of element/charge rows the loaded table is CONFIGURED with:
+// 0 means the network registers none, so chem_full_step_* leaves
+// ChemFullRates::conservation_projected false on every step by design.
+//
+// ⚠ This is not the number of rows enforced on a given step.  The projection
+// weights each species by its own abundance, so a row whose carrier species are
+// all zero drops out of that step's solve — correctly, since it owes nothing —
+// while the step still reports conservation_projected = true.
+//
+// Read through the table the caller actually holds, not from the make_*
+// factory.  A factory copy that inlines the topology steps can drop the
+// invariant rows, which would let the factory report the expected count while
+// every app going through the facade ran with none.
+// ---------------------------------------------------------------------------
+int prim_table_n_invariants(const PrimTable& tbl) noexcept;
+int prim_minimal_table_n_invariants(const PrimMinimalTable& tbl) noexcept;
+int metal_table_n_invariants(const MetalTable& tbl) noexcept;
+int metal_minimal_table_n_invariants(const MetalMinimalTable& tbl) noexcept;
+
+// ---------------------------------------------------------------------------
 // Stepping entry points (non-template; one pair per model).
 //
 //   chem_full_step_* — advance one dt AND return the full cooling/heating
@@ -411,6 +433,32 @@ double& model_cell_nH(ModelCell& c) noexcept;
 double& model_cell_T_K(ModelCell& c) noexcept;
 double& model_cell_mu(ModelCell& c) noexcept;
 double& model_cell_gamma(ModelCell& c) noexcept;
+
+// Reset only the integration history of a cell, without reallocating or
+// changing y, nH, T_K, mu, or gamma.  This clears the reaction-rate cache and
+// conservation carry; models with escape-probability cooling also re-seed the
+// persisted EscapeState warm-start arrays.  Call this before assigning a
+// pooled scratch cell to a different physical cell, not between consecutive
+// steps of the same physical cell.
+void model_cell_reset(ModelCell& c) noexcept;
+
+// Read-only thermodynamic maps over the cell's current composition.  mu is in
+// proton-mass units and gamma is dimensionless.  These use the same EOS
+// functions and summation order as the chemistry kernel for the same (y,T).
+// gamma_from_y returns quiet NaN unless T_K is positive and finite.
+double model_mu_from_y(const ModelCell& c) noexcept;
+double model_gamma_from_y(const ModelCell& c, double T_K) noexcept;
+
+// Invert specific internal energy e_cgs [erg g^-1] to temperature [K] for the
+// current composition.  The search covers [1, 1e12] K and finite energies
+// outside that bracket are clamped to the corresponding endpoint. A NaN
+// energy produces a NaN result.  c_H2() is continuous across 1000 K (the
+// classical-rotation switch is gone; the residual step from the change in the
+// number of summed rotational states is 2.2e-14 relative), so e(T) is monotone
+// over the bracket and the root is unique.  Measured T -> e -> T round trips on
+// H2-dominated compositions stay within 1.1e-11 relative over the whole
+// bracket, and within 1.5e-12 for T >= 10 K.
+double model_T_from_e(const ModelCell& c, double e_cgs) noexcept;
 
 // Advance one cell by dt (same kernel path as chem_full_step_<model>).
 // The cell must have been created from the same ModelRuntime (or one of the

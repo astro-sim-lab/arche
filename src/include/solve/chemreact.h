@@ -18,12 +18,13 @@
 #include <cstring>
 #include <utility>
 
-#include "cooling/cooling.h"  // c_H2
 #include "core/newton.h"  // gaussj_solve, newton_solve, NewtonOpts, LinSolve
+#include "cooling/cooling.h"              // c_H2
 #include "kinetics/partition_function.h"  // PfProvider, pf_eval, detail primitives
-#include "kinetics/reaction_index.h"
+#include "models/rate_kernel.h"           // compute_base_rates, compute_rates
 #include "kinetics/topology.h"
-#include "models/rate_kernel.h"  // compute_base_rates, compute_rates
+#include "kinetics/reaction_index.h"
+#include "thermo/eos.h"
 
 namespace arche {
 
@@ -81,8 +82,7 @@ inline void compute_chemistry_cooling(
   // carry He+ provide dyHep (has_he_ion), models that carry He++ provide dyHepp
   // (has_he_pp); a model without them leaves the term zero and never names
   // Sp::Hep / Sp::Hepp.  The additive energy sum below is left intact so the
-  // full models stay bit-for-bit (both flags true ⇒ same assignments, in
-  // order).
+  // full models stay bit-for-bit (both flags true ⇒ same assignments, in order).
   double dyHep = 0.0;
   double dyHepp = 0.0;
   if constexpr (Model::cooling::has_he_ion) {
@@ -165,9 +165,8 @@ inline void compute_chemistry_cooling(
              (k_rxn[cidx::Hp_rec_caseB] * y[Sp::Hp] * y[Sp::e] * nH) * dt;
     }
     // He+ recombination minus CR losses — only for models carrying He ions; the
-    // CR-producer loss is composable (a He+-but-CR-free model omits it,
-    // mirroring the dyHp split above).  Full models keep both terms,
-    // byte-identical.
+    // CR-producer loss is composable (a He+-but-CR-free model omits it, mirroring
+    // the dyHp split above).  Full models keep both terms, byte-identical.
     if constexpr (Model::cooling::has_he_ion) {
       if constexpr (Model::cooling::has_cr_loss) {
         using Hep = typename Model::cooling::Hep_producers;
@@ -192,31 +191,6 @@ inline void compute_chemistry_cooling(
       ((2.18e-11 * dyHp + 3.94e-11 * dyHep + 12.66e-11 * dyHepp) / dt + L_H2) /
       ((1.0 + 4.0 * yHe) * m_p);
   if (!std::isfinite(Lambda_chem)) Lambda_chem = 0.0;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// eos_particle_sum<Model> — free-particle count for the equation of state.
-//   Sums the neutral and ionic species the model carries (H [+H2] + e + H+ +
-//   He), adding He+/He++ only for models that have them.  The summation order
-//   matches the historical inline expressions so mu/gamma stay bit-for-bit for
-//   the full models; a model without He ions simply omits the last two terms.
-// ─────────────────────────────────────────────────────────────────────────────
-template <class Model>
-inline double eos_particle_sum(const std::array<double, Model::N_sp>& y,
-                               bool include_H2) {
-  using Sp = typename Model::Sp;
-  double s = y[Sp::H];
-  if (include_H2) s += y[Sp::H2];
-  s += y[Sp::e];
-  s += y[Sp::Hp];
-  s += y[Sp::He];
-  if constexpr (Model::cooling::has_he_ion) {
-    s += y[Sp::Hep];
-  }
-  if constexpr (Model::cooling::has_he_pp) {
-    s += y[Sp::Hepp];
-  }
-  return s;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -245,8 +219,6 @@ ChemSolveResult chemreact(double nH, double T_K,
   constexpr int N_sp = Model::N_sp;
   constexpr int N_react = Model::N_react;
   using Sp = typename Model::Sp;  // model-specific species names: y[Sp::H] etc.
-  constexpr double yHe = abundance_ref::yHe;
-  constexpr double m_p = phys::m_p;
   constexpr double eps_y = numerics::eps_y;
   constexpr double nH_eq = numerics::nH_eq;
 
@@ -282,7 +254,8 @@ ChemSolveResult chemreact(double nH, double T_K,
     }
 
     // Compute reaction rate coefficients
-    mu = (1.0 + 4.0 * yHe) / eos_particle_sum<Model>(y, /*include_H2=*/true);
+    const auto eos = thermo::make_eos_composition<Model>(y);
+    mu = thermo::mean_molecular_weight(eos);
     compute_base_rates<Model>(nH, T_K, mu, p_loc, tbl, k_rxn);
 
     // Catastrophic-detection guard
@@ -376,12 +349,9 @@ ChemSolveResult chemreact(double nH, double T_K,
   }
 
   // Update thermodynamic variables
-  mu = (1.0 + 4.0 * yHe) / eos_particle_sum<Model>(y, /*include_H2=*/true);
-
-  gamma =
-      1.0 + (1.0 + 4.0 * yHe) /
-                (mu * (1.5 * eos_particle_sum<Model>(y, /*include_H2=*/false) +
-                       c_H2(T_K) * y[Sp::H2]));
+  const auto eos = thermo::make_eos_composition<Model>(y);
+  mu = thermo::mean_molecular_weight(eos);
+  gamma = thermo::adiabatic_index(eos, T_K);
 
   // ── Chemistry cooling Lambda_chem ──────────────────────────────────────────
   compute_chemistry_cooling<Model>(y, dy, k_rxn, nH, T_K, dt, Lambda_chem);
@@ -407,7 +377,6 @@ ChemSolveResult chemcool(double nH, double Tp,
                          const ReactionTable<Model::N_sp, Model::N_react>& tbl,
                          const ChemParams& params) {
   constexpr int N_sp = Model::N_sp;
-  constexpr int N_react = Model::N_react;
   constexpr double m_p = phys::m_p;
   constexpr double k_B = phys::k_B;
   constexpr int maxit = 100;

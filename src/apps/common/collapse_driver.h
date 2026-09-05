@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "collapse_defaults.h"
+#include "core/hdf5_utils.h"
 
 namespace collapse_driver {
 
@@ -214,6 +215,124 @@ inline bool check_exit(double nH, double T_K, double e, double nH_stop,
     return true;
   }
   return false;
+}
+
+// ---------------------------------------------------------------------------
+// ConservationTally — run-level summary of the element/charge projection
+//
+// Why this exists: a projection that never fires is invisible in the output.
+// On the metal network the K and Na rows start empty, because the collapse app
+// holds both elements wholly in its own grain reservoir, and an empty row can
+// take the whole weighted matrix down with it and leave most steps
+// unprojected.  n_invariants would still read the expected 10, the run would
+// complete, and the file would look normal.  This tally puts that state into
+// the run's own stdout and output file.
+//
+// Read the counts together with rows (= n_invariants).  With rows == 0 the
+// network registers no invariant rows, so conservation::project() declines
+// immediately and EVERY step is unprojected by design.  With rows > 0 an
+// unprojected step in a collapse app is an anomaly: the other ordinary reason
+// the flag is false — a step that did not converge — cannot appear here,
+// because chem_full_step_*() returns solver_failed on that path and the loop
+// breaks before record() is reached.  What remains are project()'s own decline
+// paths: an empty row that still owes a residual, a weighted matrix that is not
+// positive definite, a repair beyond conservation::kMaxRelShift, and (only if
+// the table itself is malformed) a row count outside 1..kMaxRows.
+//
+// ⚠ rows is the CONFIGURED count, not the count enforced on a step.  The
+// projection weights each species by its own abundance, so a row whose carrier
+// species are all zero contributes nothing and is dropped from that step's
+// solve while the step still counts as projected.  That is correct — the row
+// owes nothing — but it means rows == 10 with n_projected == n_steps does not
+// assert that ten invariants held on every step.  Measured example: a Z = 1
+// metal-grain collapse keeps all K and Na in the app-side grain reservoir until
+// the grains evaporate at nH ~ 1.7e15, so eight of ten rows are solved over
+// 68.9 % of that run.  This tally does NOT detect a row that is wrongly
+// inactive for the whole run; only a decline of the entire solve.
+// ---------------------------------------------------------------------------
+struct ConservationTally {
+  // Counters are int because the collapse loop bound max_iter is int, so the
+  // step count cannot exceed it.
+  int n_steps = 0;                     // steps whose chemistry solve succeeded
+  int n_projected = 0;                 // of which the projection was applied to
+  int first_unprojected_step = -1;     // -1 = every step was projected
+  double first_unprojected_nH = -1.0;  // [cm^-3]; -1 = every step was projected
+
+  // Record one step whose chemistry solve succeeded.  nH [cm^-3] is the density
+  // the step entered with.  Call this after the solver_failed check: a failed
+  // step is rolled back and never enters the trajectory, and exit_code = 5
+  // already reports it.
+  //
+  // Note the exact denominator: recording happens right after the kernel, so a
+  // step whose LATER thermodynamic update fails (e <= 0, exit_code = 3) is
+  // still counted here.  n_steps is "chemistry steps solved", which can exceed
+  // the number of steps that completed the whole loop body by one.
+  void record(bool projected, int step, double nH) {
+    ++n_steps;
+    if (projected) {
+      ++n_projected;
+      return;
+    }
+    if (first_unprojected_step < 0) {
+      first_unprojected_step = step;
+      first_unprojected_nH = nH;
+    }
+  }
+};
+
+// ---------------------------------------------------------------------------
+// report_conservation — print the one-line projection summary to stdout
+//
+// run_collapse.sh does not tee or redirect stdout, so this line is not kept by
+// the pipeline; write_conservation_attrs() is what survives with the data.
+//
+// A run that solved no steps at all prints "projected=0/0 (0.0%)" with
+// first_unprojected=none.  That is the empty set, not a healthy run.
+// ---------------------------------------------------------------------------
+inline void report_conservation(const ConservationTally& t, int n_invariants) {
+  const double pct =
+      t.n_steps > 0 ? 100.0 * static_cast<double>(t.n_projected) / t.n_steps
+                    : 0.0;
+  if (t.first_unprojected_step < 0) {
+    std::printf(
+        "=== CONSERVATION rows=%d projected=%d/%d (%.1f%%)"
+        " first_unprojected=none ===\n",
+        n_invariants, t.n_projected, t.n_steps, pct);
+  } else {
+    std::printf(
+        "=== CONSERVATION rows=%d projected=%d/%d (%.1f%%)"
+        " first_unprojected=step %d at nH=%.4E cm^-3 ===\n",
+        n_invariants, t.n_projected, t.n_steps, pct, t.first_unprojected_step,
+        t.first_unprojected_nH);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// write_conservation_attrs — record the summary as HDF5 FILE ATTRIBUTES
+//
+// Attributes, not datasets: a per-step column would take primordial from 25 to
+// 26 datasets and force every stored baseline to be rebuilt.  As attributes the
+// dataset count and every stored number are unchanged, so the primordial output
+// stays byte-identical to main while the projection becomes observable.
+//
+// Written next to exit_code / exit_message by both collapse apps, so the two
+// apps cannot drift apart on attribute names.
+// ---------------------------------------------------------------------------
+// Returns false if any of the five attributes could not be written.  An
+// instrument whose own persistence can fail without saying so would reproduce
+// the failure mode it exists to catch, so the status is returned rather than
+// left to HDF5's stderr diagnostic.
+inline bool write_conservation_attrs(hid_t fid, const ConservationTally& t,
+                                     int n_invariants) {
+  bool ok = h5utils::H5WriteIntAttr(fid, "conservation_rows", n_invariants);
+  ok &= h5utils::H5WriteIntAttr(fid, "conservation_steps_total", t.n_steps);
+  ok &= h5utils::H5WriteIntAttr(fid, "conservation_steps_projected",
+                                t.n_projected);
+  ok &= h5utils::H5WriteIntAttr(fid, "conservation_first_unprojected_step",
+                                t.first_unprojected_step);
+  ok &= h5utils::H5WriteDblAttr(fid, "conservation_first_unprojected_nH",
+                                t.first_unprojected_nH);
+  return ok;
 }
 
 }  // namespace collapse_driver

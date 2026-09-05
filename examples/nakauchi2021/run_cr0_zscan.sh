@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Shingo Hirano and Sho Higashi
+# Licensed under the MIT found in the
+# https://github.com/astro-sim-lab/arche/blob/main/LICENSE
 # run_cr0_zscan.sh
 #
 # Run metal_grain collapse for CR=0 across 7 metallicities.

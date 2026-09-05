@@ -5,40 +5,44 @@
 // main.cc — one-zone gravitational collapse (metal_grain network)
 //
 // Single case per run; parameters are read from environment variables:
-//   METAL_ZETA0          — CR ionization rate [s^-1]       (required)
-//   METAL_Z_METAL        — metallicity [Z_sun]              (required)
-//   METAL_OUTDIR         — output directory                 (optional, default:
-//   results/metal/h5) METAL_FF_RET         — free-fall retardation factor
-//   (optional, default: 1.0) METAL_FRET_TABLE     — 2-column ASCII file:
-//   nH[cm^-3]  f_ret  step-function table
-//                          Rows sorted by ascending nH; comments with '#'
-//                          allowed. If set, METAL_FF_RET is ignored.  fret_tag
-//                          = "-step" → output:
-//                          collapse_CR<cr>_Z<z>_fret-step.h5
-//   METAL_FF_GAMMA       — gamma-dependent collapse factor (flag; set to 1 to
-//   enable)
+//   METAL_ZETA0          — CR ionization rate [s^-1]  (required)
+//   METAL_Z_METAL        — metallicity [Z_sun]  (required)
+//   METAL_OUTDIR         — output directory
+//                          (optional, default: results/metal/h5)
+//   METAL_FF_RET         — free-fall retardation factor
+//                          (optional, default: 1.0)
+//   METAL_FRET_TABLE     — 2-column ASCII file: nH[cm^-3]  f_ret
+//                          step-function table.  Rows sorted by ascending nH;
+//                          comments with '#' allowed.  If set, METAL_FF_RET is
+//                          ignored.  fret_tag = "-step"
+//                          → output: collapse_CR<cr>_Z<z>_fret-step.h5
+//   METAL_FF_GAMMA       — gamma-dependent collapse factor
+//                          (flag; set to 1 to enable)
 //                          Uses t_eff = t_ff / sqrt(1−f(γ))  (Higuchi+2018
-//                          Eq.5-7) Overrides METAL_FF_RET and METAL_FRET_TABLE.
-//                          fret_tag = "-gamma"  → output:
-//                          collapse_CR<cr>_Z<z>_fret-gamma.h5
-//   METAL_XNH0           — initial H number density [cm^-3] (optional,
-//   default: 1.0) METAL_OUTPUT_STRIDE  — write every N-th step to HDF5
-//   (optional, default: 10) METAL_MAX_ITER       — maximum integration steps
-//   (optional, default: 1000000) METAL_CHEM_TABLE     — path to metal_grain.h5
-//   chemistry table
+//                          Eq.5-7).  Overrides METAL_FF_RET and
+//                          METAL_FRET_TABLE.  fret_tag = "-gamma"
+//                          → output: collapse_CR<cr>_Z<z>_fret-gamma.h5
+//   METAL_XNH0           — initial H number density [cm^-3]
+//                          (optional, default: 0.1)
+//   METAL_OUTPUT_STRIDE  — write every N-th step to HDF5
+//                          (optional, default: 10)
+//   METAL_MAX_ITER       — maximum integration steps
+//                          (optional, default: 1000000)
+//   METAL_CHEM_TABLE     — path to metal_grain.h5 chemistry table
 //                          (optional, default: compile-time METAL_CHEM_TABLE)
-//   METAL_JLW21          — Lyman-Werner radiation intensity J_21 [10^-21
-//   erg/s/cm^2/Hz/sr]
+//   METAL_JLW21          — Lyman-Werner radiation intensity J_21
+//                          [10^-21 erg/s/cm^2/Hz/sr]
 //                          (optional, default: 0.0 = no LW field)
 //                          Activates H2/HD photodissociation and H-
 //                          photodetachment.
 //   METAL_SRA_RATE       — short-lived radionuclide ionization scaling
-//                          (optional, default: 0.0; zeta_short = rate * 7.6e-19
-//                          [s^-1])
+//                          (optional, default: 0.0;
+//                          zeta_short = rate * 7.6e-19 [s^-1])
 //   METAL_LRA_RATE       — long-lived radionuclide ionization scaling
-//                          (optional, default: 0.0; zeta_long  = rate * 1.4e-22
-//                          * Z_metal [s^-1])
-//   METAL_ABUNDANCE_SET  — abundance preset name (optional, default: solar)
+//                          (optional, default: 0.0;
+//                          zeta_long = rate * 1.4e-22 * Z_metal [s^-1])
+//   METAL_ABUNDANCE_SET  — abundance preset name
+//                          (optional, default: solar)
 //                          currently supported: solar, default
 //
 // HDF5 layout (root-level datasets):
@@ -136,6 +140,9 @@ inline arche::ChemFullRates AppChemFullStep(AppCell& cell, double dt,
                                             const AppTable& tbl) {
   return arche::chem_full_step_metal_minimal(cell, dt, params, shield, tbl);
 }
+inline int AppTableNInvariants(const AppTable& tbl) {
+  return arche::metal_minimal_table_n_invariants(tbl);
+}
 // Net positive / negative charge carried by the compact ion set (the same ions
 // the compact Saha balances; no He++, higher C/O ions, K, Na or Gr2+).
 inline double AppChargePlus(const std::array<double, kNSp>& y) {
@@ -177,6 +184,9 @@ inline arche::ChemFullRates AppChemFullStep(AppCell& cell, double dt,
                                             const arche::ChemShielding& shield,
                                             const AppTable& tbl) {
   return arche::chem_full_step_metal(cell, dt, params, shield, tbl);
+}
+inline int AppTableNInvariants(const AppTable& tbl) {
+  return arche::metal_table_n_invariants(tbl);
 }
 inline double AppChargePlus(const std::array<double, kNSp>& y) {
   return y[3] + y[4] + y[5] + y[8] + y[10] + y[13] + y[14] + y[22] + y[23] +
@@ -222,8 +232,8 @@ using collapse_defaults::kTCMB0;
 using collapse_defaults::kTHighStop;
 using collapse_defaults::kXnHStop;
 
-// ─── CR attenuation constants (metal-specific)
-// ──────────────────────────────── Secondary CR fraction (Padovani et al.)
+// ─── CR attenuation constants (metal-specific) ───────────────────────────────
+// Secondary CR fraction (Padovani et al.)
 constexpr double kCrAttenuSecondFrac = 7.6e-2;
 // Metal background CR floor [erg s^-1 g^-1 / Z_sun]
 constexpr double kCrMetalBkgnd = 1.4e-22;
@@ -253,8 +263,7 @@ constexpr double kMggasFrac = arche::metal_grain::mg_gas_frac_default;
 using collapse_defaults::kItMax;
 using collapse_defaults::kOutputStride;
 
-// ─── Initial conditions / scenario defaults — from collapse_defaults.h
-// ────────
+// ─── Initial conditions / scenario defaults — from collapse_defaults.h ───────
 using collapse_defaults::kFFRet;
 using collapse_defaults::kJLW21;
 using collapse_defaults::kTK0;
@@ -473,21 +482,23 @@ void RunCollapse(
   }
   const double y_D = abund.yD - y_Dp - y_HD;
 
-  y[AppSp::H] = y_H;              // H
-  y[AppSp::H2] = y_H2;            // H2
-  y[AppSp::Hp] = y_Hp;            // H+
-  y[AppSp::He] = abund.yHe;       // He
-  y[AppSp::D] = y_D;              // D
-  y[AppSp::HD] = y_HD;            // HD
-  y[AppSp::Dp] = y_Dp;            // D+
-  y[AppSp::Lip] = abund.yLi;      // Li+
-  y[AppSp::C] = XC * c_gas_frac;  // CI
-  y[AppSp::O] = XO * o_gas_frac;  // OI
+  // clang-format off
+  y[AppSp::H] = y_H;                  // H
+  y[AppSp::H2] = y_H2;                // H2
+  y[AppSp::Hp] = y_Hp;                // H+
+  y[AppSp::He] = abund.yHe;           // He
+  y[AppSp::D] = y_D;                  // D
+  y[AppSp::HD] = y_HD;                // HD
+  y[AppSp::Dp] = y_Dp;                // D+
+  y[AppSp::Lip] = abund.yLi;          // Li+
+  y[AppSp::C] = XC * c_gas_frac;      // CI
+  y[AppSp::O] = XO * o_gas_frac;      // OI
 #ifndef ARCHE_METAL_MINIMAL
   y[AppSp::Kp] = 0.0;   // K+  (initially zero; absent from the compact network)
   y[AppSp::Nap] = 0.0;  // Na+ (initially zero; absent from the compact network)
 #endif
   y[AppSp::Mgp] = XMg * mg_gas_frac;  // Mg+
+  // clang-format on
   // e- = sum of positive ions
 #ifdef ARCHE_METAL_MINIMAL
   y[AppSp::e] = y_Hp + y_Dp + abund.yLi + y[AppSp::Mgp];
@@ -619,6 +630,11 @@ void RunCollapse(
 
   // ── Time integration ──────────────────────────────────────────────────────
   ExitReason exit_reason = ExitReason::MaxIter;
+  collapse_driver::ConservationTally cons_tally;
+  // Read once, before the loop: this is a property of the loaded table,
+  // not of the run, and reading it through the facade the app actually
+  // uses is the point (see arche_api.h).
+  const int cons_rows = AppTableNInvariants(tbl);
   for (int it = 1; it <= max_iter; ++it) {
     // Save state from previous step for grain evaporation ratio
     rho_old = rho;
@@ -710,6 +726,7 @@ void RunCollapse(
       exit_reason = ExitReason::SolverFailed;
       break;
     }
+    cons_tally.record(rates.conservation_projected, it, nH);
     if (bench_fp) {
       double wall_us =
           std::chrono::duration<double, std::micro>(Clock::now() - t_bench)
@@ -741,6 +758,13 @@ void RunCollapse(
     collapse_driver::compute_diagnostics(rho, lmbd_J, MJ, B_cr);
 
     // ── Grain evaporation ─────────────────────────────────────────────────
+    // Above the silicate vaporization temperature the depleted metals are
+    // released back into the gas phase, in proportion to the decreased
+    // fraction of the silicate dust [Nakauchi, Omukai & Susa 2021, MNRAS 502,
+    // 3394, p.3397 sec.2; Finocchi & Gail 1997].  The depleted set is
+    // C (72%), O (46%), Mg (98%), Na and K (100%); C and O are released as
+    // neutral atoms (their ionization potentials are 11.3 / 13.6 eV), Mg as
+    // the neutral too since the network re-ionizes it thermally.
     if (switch_gr == 1) {
       double T_ice, T_vo, T_ro, T_tr, T_ir, T_pyr, T_ol;
       arche::detail::vaptemp(rho, T_ice, T_vo, T_ro, T_tr, T_ir, T_pyr, T_ol);
@@ -751,12 +775,15 @@ void RunCollapse(
       if (vol_cur < 1.0e-60) {
         // Complete evaporation: release all grain charge and the locked-in
         // metals.  The compact network has no K / Na (and no Gr2+), so its net
-        // grain charge goes to the electrons directly and only Mg is released.
+        // grain charge goes to the electrons directly and K / Na are absent
+        // from the released set.
 #ifdef ARCHE_METAL_MINIMAL
         double del_yp = y[AppSp::Grp];                         // Gr+
         double del_ym = y[AppSp::Grm] + 2.0 * y[AppSp::Gr2m];  // Gr- + 2*Gr2-
         y[AppSp::e] += (del_ym - del_yp);  // net grain charge -> electrons
         y[AppSp::Mg] += yMgs;              // Mg neutral released
+        y[AppSp::C] += yCs;                // C neutral released
+        y[AppSp::O] += yOs;                // O neutral released
         yMgs = 0.0;
         yCs = 0.0;
         yOs = 0.0;
@@ -773,9 +800,11 @@ void RunCollapse(
           y[58] += (del_yp - del_ym);  // K+
           y[57] -= (del_yp - del_ym);  // K (neutral)
         }
-        y[57] += yKs;   // K neutral released
-        y[59] += yNas;  // Na neutral released
-        y[61] += yMgs;  // Mg neutral released
+        y[57] += yKs;        // K neutral released
+        y[59] += yNas;       // Na neutral released
+        y[61] += yMgs;       // Mg neutral released
+        y[AppSp::C] += yCs;  // C neutral released
+        y[AppSp::O] += yOs;  // O neutral released
         yKs = 0.0;
         yNas = 0.0;
         yMgs = 0.0;
@@ -800,6 +829,8 @@ void RunCollapse(
               (y[AppSp::Grm] + 2.0 * y[AppSp::Gr2m]) * (1.0 - gr_frac);
           y[AppSp::e] += (del_ym - del_yp);
           y[AppSp::Mg] += yMgs * (1.0 - gr_frac);
+          y[AppSp::C] += yCs * (1.0 - gr_frac);
+          y[AppSp::O] += yOs * (1.0 - gr_frac);
           yCs *= gr_frac;
           yOs *= gr_frac;
           yMgs *= gr_frac;
@@ -818,6 +849,8 @@ void RunCollapse(
           y[57] += yKs * (1.0 - gr_frac);
           y[59] += yNas * (1.0 - gr_frac);
           y[61] += yMgs * (1.0 - gr_frac);
+          y[AppSp::C] += yCs * (1.0 - gr_frac);
+          y[AppSp::O] += yOs * (1.0 - gr_frac);
           yCs *= gr_frac;
           yOs *= gr_frac;
           yKs *= gr_frac;
@@ -911,6 +944,7 @@ void RunCollapse(
   std::string exit_label = "metal collapse CR" + cr_tag + " Z" + z_tag;
   int exit_code = collapse_driver::report_exit(exit_reason, exit_label.c_str());
   const char* exit_msg = collapse_driver::exit_message(exit_reason);
+  collapse_driver::report_conservation(cons_tally, cons_rows);
 
   // ── Write HDF5 file ───────────────────────────────────────────────────────
   std::string h5_path = out_dir + "/collapse_CR" + cr_tag + "_Z" + z_tag;
@@ -932,6 +966,11 @@ void RunCollapse(
                 y_HD_init, jlw21, fret_table_path, ff_gamma);
   H5WriteIntAttr(fid, "exit_code", exit_code);
   H5WriteStrAttr(fid, "exit_message", std::string(exit_msg));
+  if (!collapse_driver::write_conservation_attrs(fid, cons_tally, cons_rows)) {
+    std::fprintf(stderr,
+                 "ERROR: could not write the conservation attributes to %s\n",
+                 h5_path.c_str());
+  }
 #ifdef ARCHE_XRAY
   H5WriteDblAttr(fid, "zeta_X", zeta_X);
   H5WriteDblAttr(fid, "E_X_eV", E_X_eV);
