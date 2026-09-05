@@ -41,6 +41,21 @@ struct ChemRates {
   double Lambda_chem = 0.0;  // net chemistry cooling rate [erg g^-1 s^-1]
   double Gamma_CR = 0.0;     // CR heating rate            [erg g^-1 s^-1]
   double Gamma_X = 0.0;      // X-ray heating rate         [erg g^-1 s^-1]
+  // Did the element/charge conservation projection (solve/conservation.h) run
+  // to completion on this step?  false has FOUR causes:
+  //   1. the model registers no invariant rows (n_invariants == 0).
+  //      All four shipped models register rows (5 / 5 / 8 / 10), so case 1
+  //      does not fire for them; it is the path for any model whose species
+  //      are not all registered in core/species_composition.h, or whose
+  //      reaction tables do not balance under them (fail-closed).
+  //   2. the step did not converge, so no projection was attempted.
+  //   3. a weighted invariant matrix that is not positive definite.
+  //   4. a repair larger than conservation::kMaxRelShift.
+  // In every case the abundances are exactly what the solver produced.  Only
+  // 3 and 4 are anomalies; 1 and 2 are ordinary.  Do NOT read this flag as
+  // "something failed" — read it as "conservation was not enforced on this
+  // step", which is all it asserts.
+  bool conservation_projected = false;
 };
 
 // ---------------------------------------------------------------------------
@@ -113,6 +128,8 @@ struct ChemFullRates {
   // warm-start seed (see chem_full_step / cnt_cool_metal).
   double T_gr_K = 0.0;
   bool solver_failed = false;
+  // See ChemRates::conservation_projected.
+  bool conservation_projected = false;
 };
 
 // ---------------------------------------------------------------------------

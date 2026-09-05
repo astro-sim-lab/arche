@@ -81,6 +81,12 @@ typedef struct {
   double k_gas, k_gr;                                       // opacities
   double T_gr_K;                                            // solved grain temp
   int solver_failed;  // 0 = ok, 1 = failed
+  // 0 = element/charge conservation was NOT enforced on this step, 1 = it was.
+  // See ChemFullRates::conservation_projected in core/state.h for the four
+  // reasons a 0 appears.  All four shipped networks register invariant rows
+  // (5 / 5 / 8 / 10), so the "no rows registered" reason does not apply to
+  // them: on a step that converged, a 0 means the projection itself declined.
+  int conservation_projected;
 } ArcheChemFullRates;
 
 // ── Struct initialisers ─────────────────────────────────────────────────────

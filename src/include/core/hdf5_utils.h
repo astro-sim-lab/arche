@@ -86,36 +86,54 @@ inline void H5Write2d(hid_t loc, const std::string& name,
 }
 
 // Scalar fixed-length string attribute on any HDF5 object
-inline void H5WriteStrAttr(hid_t obj, const std::string& name,
+// Returns false if the attribute could not be created or written (a full disk,
+// a broken file handle, a duplicate name).  HDF5's default handler prints a
+// diagnostic to stderr, but that is not something a caller can act on, so the
+// status is returned as well.  Existing callers may ignore it.
+inline bool H5WriteStrAttr(hid_t obj, const std::string& name,
                            const std::string& val) {
   hid_t sp = H5Screate(H5S_SCALAR);
   hid_t type = H5Tcopy(H5T_C_S1);
   H5Tset_size(type, val.size() + 1);
   hid_t at = H5Acreate2(obj, name.c_str(), type, sp, H5P_DEFAULT, H5P_DEFAULT);
-  H5Awrite(at, type, val.c_str());
-  H5Aclose(at);
+  bool ok = (at >= 0);
+  if (ok) {
+    ok = (H5Awrite(at, type, val.c_str()) >= 0);
+    H5Aclose(at);
+  }
   H5Tclose(type);
   H5Sclose(sp);
+  return ok;
 }
 
 // Scalar double attribute
-inline void H5WriteDblAttr(hid_t obj, const std::string& name, double val) {
+// Returns false on failure; see H5WriteStrAttr.
+inline bool H5WriteDblAttr(hid_t obj, const std::string& name, double val) {
   hid_t sp = H5Screate(H5S_SCALAR);
   hid_t at = H5Acreate2(obj, name.c_str(), H5T_NATIVE_DOUBLE, sp, H5P_DEFAULT,
                         H5P_DEFAULT);
-  H5Awrite(at, H5T_NATIVE_DOUBLE, &val);
-  H5Aclose(at);
+  bool ok = (at >= 0);
+  if (ok) {
+    ok = (H5Awrite(at, H5T_NATIVE_DOUBLE, &val) >= 0);
+    H5Aclose(at);
+  }
   H5Sclose(sp);
+  return ok;
 }
 
 // Scalar int attribute
-inline void H5WriteIntAttr(hid_t obj, const std::string& name, int val) {
+// Returns false on failure; see H5WriteStrAttr.
+inline bool H5WriteIntAttr(hid_t obj, const std::string& name, int val) {
   hid_t sp = H5Screate(H5S_SCALAR);
   hid_t at = H5Acreate2(obj, name.c_str(), H5T_NATIVE_INT, sp, H5P_DEFAULT,
                         H5P_DEFAULT);
-  H5Awrite(at, H5T_NATIVE_INT, &val);
-  H5Aclose(at);
+  bool ok = (at >= 0);
+  if (ok) {
+    ok = (H5Awrite(at, H5T_NATIVE_INT, &val) >= 0);
+    H5Aclose(at);
+  }
   H5Sclose(sp);
+  return ok;
 }
 
 // Open (create/truncate) HDF5 file with POSIX locking disabled

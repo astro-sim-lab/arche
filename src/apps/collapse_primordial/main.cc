@@ -136,6 +136,9 @@ inline arche::ChemFullRates AppChemFullStep(AppCell& cell, double dt,
                                             const AppTable& tbl) {
   return arche::chem_full_step_prim_minimal(cell, dt, params, shield, tbl);
 }
+inline int AppTableNInvariants(const AppTable& tbl) {
+  return arche::prim_minimal_table_n_invariants(tbl);
+}
 constexpr const char* kNetworkLabel =
     "zero_metal_minimal N_sp=15 N_react=33 "
     "(Nakauchi2019 minimal: compact 15-species / 33-reaction network)";
@@ -170,6 +173,9 @@ inline arche::ChemFullRates AppChemFullStep(AppCell& cell, double dt,
                                             const arche::ChemShielding& shield,
                                             const AppTable& tbl) {
   return arche::chem_full_step_prim(cell, dt, params, shield, tbl);
+}
+inline int AppTableNInvariants(const AppTable& tbl) {
+  return arche::prim_table_n_invariants(tbl);
 }
 constexpr const char* kNetworkLabel = "zero_metal N_sp=23 N_react=140";
 constexpr const char* kOutputTag = "";
@@ -466,6 +472,11 @@ void RunCollapse(
 
   // ── Time integration ──────────────────────────────────────────────────────
   ExitReason exit_reason = ExitReason::MaxIter;
+  collapse_driver::ConservationTally cons_tally;
+  // Read once, before the loop: this is a property of the loaded table,
+  // not of the run, and reading it through the facade the app actually
+  // uses is the point (see arche_api.h).
+  const int cons_rows = AppTableNInvariants(tbl);
   for (int it = 1; it <= max_iter; ++it) {
     if (has_fret_tab)
       collapse_driver::update_fret(fret_idx, f_ret, nH, fret_nH, fret_val);
@@ -524,6 +535,7 @@ void RunCollapse(
       exit_reason = ExitReason::SolverFailed;
       break;
     }
+    cons_tally.record(rates.conservation_projected, it, nH);
     if (bench_fp) {
       double wall_us =
           std::chrono::duration<double, std::micro>(Clock::now() - t_bench)
@@ -620,6 +632,7 @@ void RunCollapse(
   std::string exit_label = "prim collapse CR" + cr_tag;
   int exit_code = collapse_driver::report_exit(exit_reason, exit_label.c_str());
   const char* exit_msg = collapse_driver::exit_message(exit_reason);
+  collapse_driver::report_conservation(cons_tally, cons_rows);
 
   // ── Write HDF5 file ───────────────────────────────────────────────────────
   std::string h5_path = out_dir + "/collapse_CR" + cr_tag + kOutputTag;
@@ -639,6 +652,11 @@ void RunCollapse(
                 y_H2_init, y_HD_init, jlw21, fret_table_path, ff_gamma);
   H5WriteIntAttr(fid, "exit_code", exit_code);
   H5WriteStrAttr(fid, "exit_message", std::string(exit_msg));
+  if (!collapse_driver::write_conservation_attrs(fid, cons_tally, cons_rows)) {
+    std::fprintf(stderr,
+                 "ERROR: could not write the conservation attributes to %s\n",
+                 h5_path.c_str());
+  }
 #ifdef ARCHE_XRAY
   H5WriteDblAttr(fid, "zeta_X", zeta_X);
   H5WriteDblAttr(fid, "E_X_eV", E_X_eV);

@@ -5,6 +5,7 @@
 #include <hdf5.h>
 
 #include <array>
+#include <cstddef>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -12,6 +13,7 @@
 #include <vector>
 
 #include "core/hdf5_utils.h"
+#include "core/species_composition.h"  // composition::kMaxInvariantRows
 #include "core/species_index.h"
 
 namespace arche {
@@ -197,6 +199,50 @@ struct ReactionTable {
 
   // Number of reactions actually loaded.
   int n_loaded = 0;
+
+  // ── Linear invariants of the network (solve/conservation.h) ───────────
+  // Per-species element counts and charge — a basis of the LEFT NULL SPACE of
+  // the stoichiometric matrix, but deliberately NOT an orthonormal one.  An
+  // orthonormalised basis of the same space was implemented and measured, and
+  // rejected because it raised cond(C W C^T) from ~1 to 2.4e8 and made the Li
+  // residual 1000x worse (see solve/conservation.h, "WHY THE ROWS ARE ELEMENT
+  // COUNTS").  Stored row-major, n_invariants rows of N_sp.
+  // Every row v satisfies v^T S = 0 and
+  // therefore d(v·y)/dt = 0 exactly, so v·y is conserved by the kinetics
+  // whatever the rate coefficients.  Derived from `reactions` above by
+  // conservation::fill_invariants() when the table is built, so it can never
+  // assert an invariant the loaded network does not have.  n_invariants = 0
+  // means no projection is applied.
+  // Sized kMaxInvariantRows x N_sp, which is the most build_invariants() can
+  // ever write.  (It arrived as N_sp x N_sp, which over-allocates by 4.6x at
+  // N_sp = 23 and 30x at N_sp = 150 for rows that are never filled.)
+  std::array<double,
+             static_cast<std::size_t>(composition::kMaxInvariantRows) * N_sp_>
+      invariants{};
+  int n_invariants = 0;
+  // Index of the charge row inside `invariants` (always the last row when
+  // present), or -1.  It is the one row whose target is absolute (neutrality)
+  // rather than "the value this step was handed".
+  int charge_invariant_row = -1;
+
+  // ── Reactions whose product list does not fit the record ──────────────
+  // A Reaction holds at most three products, but reaction 273 of the full
+  // metal_grain network has four:
+  //     He+ + CH4 -> H2 + He + CH+ + H
+  // The rate kernel injects the fourth rather than widening every record by a
+  // slot (models/rate_kernel.h, the `sp_4body_H` branch).
+  // build_invariants() reads `reactions` only, so it MUST be told about the
+  // injected product: without it the reaction reads as unbalanced in H (4 in,
+  // 3 out) and the whole matrix fails closed with n_invariants = 0, silently
+  // disabling the projection for the entire network.
+  // `extra_product_rxn` is the 1-based Reaction::num, or -1 when the model has
+  // no such reaction (every primordial model, and Nakauchi2021_Minimal whose
+  // keep-set drops 273).  `extra_product_sp` is the species index it adds one
+  // of.  Only a single-species, single-count injection is representable; a
+  // model needing more must extend this rather than leave it unstated, or the
+  // fail-closed guarantee is lost.
+  int extra_product_rxn = -1;
+  int extra_product_sp = -1;
 
   // ── Grain surface reaction table (metal_grain only) ───────────────────
   static constexpr int N_grain = 200;

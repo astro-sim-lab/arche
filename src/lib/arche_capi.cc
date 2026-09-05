@@ -82,6 +82,7 @@ void from_cpp(const arche::ChemFullRates& r, ArcheChemFullRates& c) {
   c.k_gr = r.k_gr;
   c.T_gr_K = r.T_gr_K;
   c.solver_failed = r.solver_failed ? 1 : 0;
+  c.conservation_projected = r.conservation_projected ? 1 : 0;
 }
 
 // Map a caught exception to an ARCHE_ERR_* code (and record its message).

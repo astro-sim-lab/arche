@@ -182,6 +182,28 @@ MetalMinimalTable* load_metal_minimal_table(const std::string& h5_path);
 void metal_minimal_table_destroy(MetalMinimalTable* tbl) noexcept;
 
 // ---------------------------------------------------------------------------
+// Invariant-row count of a loaded table (see solve/conservation.h).
+//
+// Returns the number of element/charge rows the loaded table is CONFIGURED with:
+// 0 means the network registers none, so chem_full_step_* leaves
+// ChemFullRates::conservation_projected false on every step by design.
+//
+// ⚠ This is not the number of rows enforced on a given step.  The projection
+// weights each species by its own abundance, so a row whose carrier species are
+// all zero drops out of that step's solve — correctly, since it owes nothing —
+// while the step still reports conservation_projected = true.
+//
+// Read through the table the caller actually holds, not from the make_*
+// factory.  A factory copy that inlines the topology steps can drop the
+// invariant rows, which would let the factory report the expected count while
+// every app going through the facade ran with none.
+// ---------------------------------------------------------------------------
+int prim_table_n_invariants(const PrimTable& tbl) noexcept;
+int prim_minimal_table_n_invariants(const PrimMinimalTable& tbl) noexcept;
+int metal_table_n_invariants(const MetalTable& tbl) noexcept;
+int metal_minimal_table_n_invariants(const MetalMinimalTable& tbl) noexcept;
+
+// ---------------------------------------------------------------------------
 // Stepping entry points (non-template; one pair per model).
 //
 //   chem_full_step_* — advance one dt AND return the full cooling/heating
