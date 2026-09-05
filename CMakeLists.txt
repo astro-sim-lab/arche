@@ -22,12 +22,23 @@ find_package(HDF5 REQUIRED COMPONENTS C)
 # instead of re-instantiating the templates, and an external app can drive the
 # network via api/arche_api.h alone (no Eigen/HDF5 in its own sources).
 #
+# Thermo inversion implementations intentionally remain separate translation
+# units for numerical reproducibility. Moving them into arche_api.cc changes
+# the large unit's optimization budget and can alter ULP-level code generation
+# for its inline-template COMDAT definitions (including metal line cooling),
+# affecting existing linked applications.  LTO/IPO removes this isolation and
+# restores that code-generation coupling.
+#
 # The target is named `arche` (artefact libarche.a) and is also exposed as the
 # namespaced alias `arche::arche`, which is the name external consumers should
 # link (via add_subdirectory / FetchContent). The `::` makes CMake treat it as a
 # target and error early on a typo. All usage requirements are PUBLIC so they
 # apply both to libarche's own compilation and to every consumer.
-add_library(arche STATIC src/lib/arche_api.cc src/lib/arche_capi.cc)
+add_library(arche STATIC
+    src/lib/arche_api.cc
+    src/lib/arche_capi.cc
+    src/thermo/eos.cc
+)
 add_library(arche::arche ALIAS arche)
 # Compile the static archive as position-independent code.  Modern toolchains
 # link executables as PIE by default, and consumers may embed libarche into a

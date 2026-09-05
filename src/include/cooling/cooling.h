@@ -13,49 +13,18 @@
 #include <cmath>
 
 #include "kinetics/rates.h"  // detail::eval_opacity (k_prm)
+#include "thermo/h2_thermodynamics.h"
 
 namespace arche {
 
 // ─────────────────────────────────────────────────────────────────────────────
-// c_H2 — internal degrees-of-freedom factor for H2: returns 1/(γ-1)
-//   c_H2 = 3/2 + c_rot + c_vib
-//   Used in γ calculation: γ = 1 + (1+4yHe) / [mu * (1.5*(atoms) + c_H2*y_H2)]
+// c_H2 — compatibility entry point for the H2 EOS factor.
+//
+// The implementation belongs to thermo so the EOS layer does not depend on
+// cooling.  Keep this wrapper while existing cooling and solver callers use
+// arche::c_H2().
 // ─────────────────────────────────────────────────────────────────────────────
-inline double c_H2(double T_K) {
-  double c_rot;
-  if (T_K > 1.0e3) {
-    c_rot = 1.0;
-  } else {
-    constexpr double eps = 1.0e-3;
-    const double T_b = (1.0 - eps) * T_K;
-    const double T_f = (1.0 + eps) * T_K;
-    double Zp_b = 0, Zp_f = 0, Xp_b = 0, Xp_f = 0;
-    double Zo_b = 0, Zo_f = 0, Xo_b = 0, Xo_f = 0;
-    for (int K = 0; K <= 20; ++K) {
-      double E = 85.4 * static_cast<double>(K * (K + 1));
-      double wb = static_cast<double>(2 * K + 1) * std::exp(-E / T_b);
-      double wf = static_cast<double>(2 * K + 1) * std::exp(-E / T_f);
-      if (K % 2 == 0) {
-        Zp_b += wb;
-        Zp_f += wf;
-        Xp_b += E * wb;
-        Xp_f += E * wf;
-      } else {
-        Zo_b += wb;
-        Zo_f += wf;
-        Xo_b += E * wb;
-        Xo_f += E * wf;
-      }
-    }
-    double Erot_f = 0.25 * (Xp_f / Zp_f) + 0.75 * (Xo_f / Zo_f);
-    double Erot_b = 0.25 * (Xp_b / Zp_b) + 0.75 * (Xo_b / Zo_b);
-    c_rot = (Erot_f - Erot_b) / (2.0 * eps * T_K);
-  }
-  double x = 6.1e3 / T_K;
-  double ex = std::exp(x);
-  double c_vib = (x > 1.0e2) ? 0.0 : (x * x * ex) / ((ex - 1.0) * (ex - 1.0));
-  return 1.5 + c_rot + c_vib;
-}
+inline double c_H2(double T_K) { return thermo::c_H2(T_K); }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // fesc_H2 — H2 line escape fraction (fitting formula)
