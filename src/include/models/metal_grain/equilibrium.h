@@ -358,22 +358,24 @@ inline void equichem_metal_minimal(
     }
   }
 
+  // clang-format off
   // Equilibrium ratio constants (compact slot index → full reaction id):
   // H sequence
-  double K_Hp = Keqb[0] / nH;                              // id 2
-  double K_Hm = nH / Keqb[2];                              // id 7
-  double K_H2p = Keqb[0] / Keqb[4];                        // id 2 / id 9
-  double K_H2 = nH / Keqb[2] / Keqb[3];                    // id 7, id 8
-  double K_H3p = nH * Keqb[0] /                            // id 2
-                 (Keqb[2] * Keqb[3] * Keqb[4] * Keqb[5]);  // id 7,8,9,26
+  double K_Hp = Keqb[0] / nH;                                 // id 2
+  double K_Hm = nH / Keqb[2];                                 // id 7
+  double K_H2p = Keqb[0] / Keqb[4];                           // id 2 / id 9
+  double K_H2 = nH / Keqb[2] / Keqb[3];                       // id 7, id 8
+  double K_H3p = nH * Keqb[0] /                               // id 2
+                 (Keqb[2] * Keqb[3] * Keqb[4] * Keqb[5]);     // id 7,8,9,26
   // He sequence (He, He+ only)
-  double K_Hep = Keqb[1] / nH;  // id 4
+  double K_Hep = Keqb[1] / nH;                                // id 4
   // D sequence (D, HD, D+ only)
-  double K_Dp = Keqb[6] / nH;  // id 51
-  double K_HD = nH / Keqb[7];  // id 54
+  double K_Dp = Keqb[6] / nH;                                 // id 51
+  double K_HD = nH / Keqb[7];                                 // id 54
   // Li sequence (Li, Li+ only)
-  double K_Lip = Keqb[22] / nH;  // id 801
+  double K_Lip = Keqb[22] / nH;                               // id 801
 
+  // clang-format on
   // ── fill_y: write yy[0..30] from (y_e, y_H, y_C, y_O) ──────────────────────
   auto fill_y = [&](auto& yy, double ye, double yh, double yc, double yo) {
     double yHp = K_Hp * yh / ye;

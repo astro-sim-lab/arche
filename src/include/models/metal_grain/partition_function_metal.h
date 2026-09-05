@@ -22,8 +22,8 @@
 #include <utility>
 #include <vector>
 
-#include "core/species_catalog.h"
 #include "core/species_index.h"
+#include "core/species_catalog.h"
 #include "core/state.h"
 #include "kinetics/partition_function.h"  // PfProvider, pf_eval, detail::*
 #include "kinetics/topology.h"            // ReactionTable

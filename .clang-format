@@ -1,0 +1,31 @@
+# Formatting rules for the arche C/C++ sources.
+#
+# Derived from Google style with three deliberate deviations:
+#
+#   ReflowComments: false
+#       The sources document environment variables, HDF5 attributes and reaction
+#       tables in hand-aligned two-column comment blocks.  Reflowing them glues
+#       adjacent entries onto one line and destroys the alignment, so comment
+#       bodies are left exactly as written.
+#
+#   AlignTrailingComments: true
+#       Reaction-coefficient assignments carry a trailing `// num N` naming the
+#       reaction id.  Keeping that column aligned is what makes the tables
+#       readable next to the source they were transcribed from.
+#
+#   SortIncludes: false
+#       Several headers include kinetics/reaction_index.h ahead of core/, which
+#       alphabetical sorting would move.  Left unsorted until the intended
+#       ordering is expressed as IncludeCategories.
+#
+# Hand-aligned tables that clang-format cannot preserve on its own are wrapped
+# in `// clang-format off` / `// clang-format on`.
+---
+Language: Cpp
+BasedOnStyle: Google
+ColumnLimit: 80
+ReflowComments: false
+AlignTrailingComments: true
+SortIncludes: false
+DerivePointerAlignment: false
+PointerAlignment: Left

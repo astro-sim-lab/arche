@@ -16,8 +16,8 @@
 // ---------------------------------------------------------------------------
 #include <algorithm>
 
-#include "cooling/grain.h"
 #include "kinetics/reaction_index.h"
+#include "cooling/grain.h"
 #include "models/metal_grain/reaction_metal_grain_charge.h"
 #include "models/metal_grain/reaction_metal_grain_surface.h"
 #include "models/primordial/rate_laws.h"
@@ -139,8 +139,8 @@ inline void compute_metal_rates(std::array<double, 2 * N_react>& k_rxn,
   k_rxn[195] = 1.09e-11 * std::pow(T300, -2.19) * std::exp(-165.1 / T_K);
   k_rxn[196] = 1.33e-10;
   k_rxn[197] = 1.30e-10;
-  // k_rxn[198] O + OH -> O2 + H  (completely commented out → 0)
-  // k_rxn[198] = 0.0;  // already zero from fill
+  // k_rxn[198] O + OH -> O2 + H: absent from the source network, so the slot
+  // keeps the zero from fill.
   k_rxn[199] = 2.00e-10 * std::pow(T300, -0.12);
   k_rxn[200] = 5.00e-11;
   k_rxn[201] = 5.00e-11;
