@@ -753,6 +753,13 @@ void RunCollapse(
     collapse_driver::compute_diagnostics(rho, lmbd_J, MJ, B_cr);
 
     // ── Grain evaporation ─────────────────────────────────────────────────
+    // Above the silicate vaporization temperature the depleted metals are
+    // released back into the gas phase, in proportion to the decreased
+    // fraction of the silicate dust [Nakauchi, Omukai & Susa 2021, MNRAS 502,
+    // 3394, p.3397 sec.2; Finocchi & Gail 1997].  The depleted set is
+    // C (72%), O (46%), Mg (98%), Na and K (100%); C and O are released as
+    // neutral atoms (their ionization potentials are 11.3 / 13.6 eV), Mg as
+    // the neutral too since the network re-ionizes it thermally.
     if (switch_gr == 1) {
       double T_ice, T_vo, T_ro, T_tr, T_ir, T_pyr, T_ol;
       arche::detail::vaptemp(rho, T_ice, T_vo, T_ro, T_tr, T_ir, T_pyr, T_ol);
@@ -763,12 +770,15 @@ void RunCollapse(
       if (vol_cur < 1.0e-60) {
         // Complete evaporation: release all grain charge and the locked-in
         // metals.  The compact network has no K / Na (and no Gr2+), so its net
-        // grain charge goes to the electrons directly and only Mg is released.
+        // grain charge goes to the electrons directly and K / Na are absent
+        // from the released set.
 #ifdef ARCHE_METAL_MINIMAL
         double del_yp = y[AppSp::Grp];                         // Gr+
         double del_ym = y[AppSp::Grm] + 2.0 * y[AppSp::Gr2m];  // Gr- + 2*Gr2-
         y[AppSp::e] += (del_ym - del_yp);  // net grain charge -> electrons
         y[AppSp::Mg] += yMgs;              // Mg neutral released
+        y[AppSp::C] += yCs;                // C neutral released
+        y[AppSp::O] += yOs;                // O neutral released
         yMgs = 0.0;
         yCs = 0.0;
         yOs = 0.0;
@@ -785,9 +795,11 @@ void RunCollapse(
           y[58] += (del_yp - del_ym);  // K+
           y[57] -= (del_yp - del_ym);  // K (neutral)
         }
-        y[57] += yKs;   // K neutral released
-        y[59] += yNas;  // Na neutral released
-        y[61] += yMgs;  // Mg neutral released
+        y[57] += yKs;        // K neutral released
+        y[59] += yNas;       // Na neutral released
+        y[61] += yMgs;       // Mg neutral released
+        y[AppSp::C] += yCs;  // C neutral released
+        y[AppSp::O] += yOs;  // O neutral released
         yKs = 0.0;
         yNas = 0.0;
         yMgs = 0.0;
@@ -812,6 +824,8 @@ void RunCollapse(
               (y[AppSp::Grm] + 2.0 * y[AppSp::Gr2m]) * (1.0 - gr_frac);
           y[AppSp::e] += (del_ym - del_yp);
           y[AppSp::Mg] += yMgs * (1.0 - gr_frac);
+          y[AppSp::C] += yCs * (1.0 - gr_frac);
+          y[AppSp::O] += yOs * (1.0 - gr_frac);
           yCs *= gr_frac;
           yOs *= gr_frac;
           yMgs *= gr_frac;
@@ -830,6 +844,8 @@ void RunCollapse(
           y[57] += yKs * (1.0 - gr_frac);
           y[59] += yNas * (1.0 - gr_frac);
           y[61] += yMgs * (1.0 - gr_frac);
+          y[AppSp::C] += yCs * (1.0 - gr_frac);
+          y[AppSp::O] += yOs * (1.0 - gr_frac);
           yCs *= gr_frac;
           yOs *= gr_frac;
           yKs *= gr_frac;
