@@ -101,8 +101,8 @@ log10_nH,T_K,xLmbd_net,y_0,y_1,...,y_N
 | `T_K` | Gas temperature [K] | log-average |
 | `T_gr_K` | Grain temperature [K] (**metal only**) | log-average |
 | `xLmbd_net` | Net cooling rate [erg g⁻¹ s⁻¹] | arithmetic mean |
-| `y_0` … `y_22` | Species abundances — prim (23 species) | log-average |
-| `y_0` … `y_88` | Species abundances — metal (89 species) | log-average |
+| `y_0` … `y_22` | Species abundances — prim (23 species; `y_0` … `y_14` for the minimal network, 15 species) | log-average |
+| `y_0` … `y_94` | Species abundances — metal (95 species; `y_0` … `y_43` for the minimal network, 44 species) | log-average |
 
 ---
 
@@ -113,7 +113,7 @@ The resampled CSV reproduces these rates as part of the species/cooling columns.
 
 | Species | Model | Reference |
 |---|---|---|
-| H₂ | WG2019 eq. 7–8: α(n,T)-dependent | Wolcott-Green & Haiman (2019) MNRAS 484, 2467 |
+| H₂ | WG2019 eq. 7–8: α(n,T)-dependent (α at 8000 K above 8000 K) | Wolcott-Green & Haiman (2019) MNRAS 484, 2467 |
 | HD | WG2011 (α = 2 fixed) | Wolcott-Green & Haiman (2011) |
 | H⁻ | No self-shielding | Tegmark et al. (1997) |
 

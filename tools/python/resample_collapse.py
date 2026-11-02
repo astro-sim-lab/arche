@@ -102,7 +102,7 @@ def _avg(col_name: str, arr: np.ndarray) -> float:
 # HDF5 loading
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Output-schema compatibility (N-B). v2 files use renamed dataset names
+# Output-schema compatibility. v2 files use renamed dataset names
 # (nH / Lambda_* / Gamma_* / M_J / lambda_J); legacy v1 files use x-prefixed
 # names. Alias v1 keys to v2 on load so the rest of the tool uses v2 names.
 LEGACY_TO_V2 = {

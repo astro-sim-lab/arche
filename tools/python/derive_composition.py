@@ -25,18 +25,16 @@ CATALOG: Final = pathlib.Path("src/include/core/species_catalog.h")
 ELEMENTS: Final[tuple[str, ...]] = ("He", "Li", "Na", "Mg", "H", "D", "C", "O", "K")
 
 #: Storage order of `Composition::n` in core/species_composition.h.
-#: ⚠ The four primordial elements come FIRST and in their original order.  The
-#: rows of an invariant matrix are emitted in this order and all-zero rows are
-#: pruned (solve/conservation.h), so appending the metal elements leaves the
-#: primordial models with exactly the rows {H, He, D, Li, charge} they had
-#: before, in the same order — which is what keeps their output unchanged.
-#: Inserting a metal element before Li would reorder those rows and move the
-#: least-squares rounding.
+#: ⚠ The four primordial elements come FIRST.  The rows of an invariant matrix
+#: are emitted in this order and all-zero rows are pruned (solve/conservation.h),
+#: so the primordial models carry exactly the rows {H, He, D, Li, charge}, in
+#: that order.  Inserting a metal element before Li would reorder those rows and
+#: move the least-squares rounding.
 STORAGE_ORDER: Final[tuple[str, ...]] = (
     "H", "He", "D", "Li", "C", "O", "K", "Na", "Mg")
 
 #: Two thresholds, not one, because the catalog's mass column mixes two error
-#: scales.  Measured on all 89 rows: the largest deviation attributable to the
+#: scales.  Measured on all 95 rows: the largest deviation attributable to the
 #: catalog's own rounding is 1.5e-3 amu (He++, tabulated as exactly 4.0), while
 #: a genuine mis-parse — dropping an H, reading "Na" as N+a — moves the mass by
 #: ~1 amu or more.  A single 5e-5 tolerance could not tell them apart and made
@@ -58,10 +56,14 @@ def read_catalog() -> list[tuple[str, str, float]]:
 def parse(name: str) -> tuple[dict[str, int], int] | None:
     """Return ({element: count}, charge) or None if the name is not parseable."""
     body = name
-    # Phase suffix: `_p` = ice mantle / grain surface, `_c` = chemisorbed.
-    # It marks WHERE the species sits, not what it is made of.
-    if body.endswith(("_p", "_c")):
+    # Phase suffix: `_p` = ice mantle / grain surface, `_c` = chemisorbed,
+    # `_s` = locked in the refractory dust.  It marks WHERE the species sits,
+    # not what it is made of.
+    if body.endswith(("_p", "_c", "_s")):
         body = body[:-2]
+    # The grain-volume tracer is a number, not matter.
+    if body == "Gr_v":
+        return {}, 0
     # Dust grains carry charge but none of the tracked elements.
     if body.startswith("Gr"):
         rest = body[2:]
