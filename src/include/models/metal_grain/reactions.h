@@ -1966,7 +1966,7 @@ inline constexpr std::array<GrainReaction, 148> kGrain = {{
 // Minimal-network keep-sets.
 //
 // Reaction-id selections that carve the compact metal_grain Minimal network
-// (40 species) out of the full network above.  Each array lists the full
+// (44 species) out of the full network above.  Each array lists the full
 // reaction `num`s the Minimal model retains; models/metal_grain/minimal.h
 // looks each id up here, remaps its species through the canonical<->local
 // maps, and renumbers 1..N to build the compact topology.  Grouped by the

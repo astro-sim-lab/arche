@@ -42,12 +42,6 @@ struct Nakauchi2019 {
   static constexpr bool has_escape = false;
   static constexpr bool has_uv_shield = false;
 
-  static constexpr int nr_max_iter = 30;
-  static constexpr bool catastrophic_detect_always = true;
-  static constexpr bool has_in_loop_divergence_guard = false;
-  static constexpr int equichem_dy_count = 23;
-  static constexpr bool secant_skip_high_density = true;
-
   static constexpr int cr_heat_var_begin = zero_metal::cr_heat_var_begin;
   static constexpr int cr_heat_var_end = zero_metal::cr_heat_var_end;
 
@@ -114,12 +108,6 @@ struct Nakauchi2019_Minimal {
   static constexpr bool is_compact_metal = false;
   static constexpr bool has_escape = false;
   static constexpr bool has_uv_shield = false;
-
-  static constexpr int nr_max_iter = 30;
-  static constexpr bool catastrophic_detect_always = true;
-  static constexpr bool has_in_loop_divergence_guard = false;
-  static constexpr int equichem_dy_count = zero_metal_minimal::N_sp;  // 15
-  static constexpr bool secant_skip_high_density = true;
 
   // CR heating sums the 6 direct ionization channels (compact slots 24..29).
   static constexpr int cr_heat_var_begin =

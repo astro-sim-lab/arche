@@ -3,13 +3,14 @@
 // https://github.com/astro-sim-lab/arche/blob/main/LICENSE
 #pragma once
 // ---------------------------------------------------------------------------
-// minimal.h — compact metal_grain Minimal network (40 species, 104 gas-phase
+// minimal.h — compact metal_grain Minimal network (44 species, 104 gas-phase
 // reactions + 10 grain-surface freeze-out reactions).
 //
-// A first-class composed model: a 40-species selection from the canonical
+// A first-class composed model: a 44-species selection from the canonical
 // catalog carrying the reduced chemical network of a low-metallicity
 // star-forming cloud (H/He/D core, a compact C/O molecular network, Li and Mg,
-// four grain charge states, and five ice-mantle surface species).  The
+// four grain charge states, five ice-mantle surface species, and the dust
+// reservoirs of the grain evaporation).  The
 // gas-phase reactions split into three solver blocks that mirror the full
 // network's partition: standard two-body reactions with detailed-balance
 // reverse, the cosmic-ray channels, and the ion-grain charge-transfer reactions
@@ -17,7 +18,8 @@
 // desorption) is carried in the separate grain-reaction table.
 //
 // Its topology is the full metal_grain network's keep-set relabelled into the
-// compact local index space, so the linear solve is 42x42.  The compact
+// compact local index space, so the coupled Newton solves 45 unknowns (44
+// species and the temperature).  The compact
 // reaction / grain / Saha tables are derived from the full network
 // (models/metal_grain/reactions.h) by selecting the keep-set, remapping species
 // through the canonical<->local maps, and renumbering 1..N.  Deriving rather
@@ -38,10 +40,12 @@
 namespace arche {
 namespace metal_grain_minimal {
 
-// 40-species selection (canonical order).  Core H/He/D (12), compact carbon
+// 44-species selection (canonical order).  Core H/He/D (12), compact carbon
 // (C, CH, CH2, C+), neutral oxygen (O, O2, OH, CO, H2O, HCO), O/C ions (O+,
-// OH+, H2O+, HCO+, H3O+), Li/Mg, four grain charge states (no gr2+), and five
-// ice-mantle species (O, OH, CO, H2O, C on grain).
+// OH+, H2O+, HCO+, H3O+), Li/Mg, four grain charge states (no gr2+), five
+// ice-mantle species (O, OH, CO, H2O, C on grain), and the dust reservoirs of
+// the grain evaporation (C, O, Mg locked in the dust and the grain-volume
+// tracer).
 using Species =
     SpeciesSet<SpId::H, SpId::H2, SpId::e, SpId::Hp, SpId::H2p, SpId::H3p,
                SpId::Hm, SpId::He, SpId::Hep, SpId::D, SpId::HD, SpId::Dp,
@@ -49,9 +53,10 @@ using Species =
                SpId::OH, SpId::CO, SpId::H2O, SpId::HCO, SpId::Op, SpId::OHp,
                SpId::H2Op, SpId::HCOp, SpId::H3Op, SpId::Li, SpId::Lip,
                SpId::Mg, SpId::Mgp, SpId::Gr, SpId::Grp, SpId::Grm, SpId::Gr2m,
-               SpId::O_p, SpId::OH_p, SpId::CO_p, SpId::H2O_p, SpId::C_p>;
+               SpId::O_p, SpId::OH_p, SpId::CO_p, SpId::H2O_p, SpId::C_p,
+               SpId::C_s, SpId::O_s, SpId::Mg_s, SpId::Gr_v>;
 
-constexpr int N_sp = Species::N;  // 40
+constexpr int N_sp = Species::N;  // 44
 constexpr int N_gas = 103;        // 68 standard + 8 CR + 27 grain-charge
 constexpr int N_grain = 10;       // 5 adsorption + 5 thermal desorption
 // k_rxn stride.  Like the full network (metal_grain::N_react = 1200 >> 821
@@ -107,12 +112,16 @@ enum Sp : int {
   CO_p = Species::local(SpId::CO_p),
   H2O_p = Species::local(SpId::H2O_p),
   C_p = Species::local(SpId::C_p),
+  C_s = Species::local(SpId::C_s),
+  O_s = Species::local(SpId::O_s),
+  Mg_s = Species::local(SpId::Mg_s),
+  Gr_v = Species::local(SpId::Gr_v),
 };
 
-static_assert(N_sp == 40, "metal Minimal network must carry 40 species");
+static_assert(N_sp == 44, "metal Minimal network must carry 44 species");
 static_assert(
     H == 0 && He == 7 && C == 12 && O == 16 && Gr == 31 && Gr2m == 34 &&
-        C_p == 39,
+        C_p == 39 && C_s == 40 && Gr_v == 43,
     "metal Minimal Sp indices must follow the catalog selection order");
 
 // ── Loop bounds.  compute_rates runs the standard forward+reverse loop over
@@ -165,6 +174,49 @@ constexpr int He_CRph = 75;  // id 678  He + CRph -> e + He+
 }  // namespace cooling_idx
 
 using MinimalTable = ReactionTable<N_sp, N_react>;
+
+// ── Full -> compact slot map for the rate coefficients (rate_kernel.h,
+//    metal_base_rates through a MappedRates sink).  Indexed by the full network's
+//    k_rxn index (forward num-1, reverse num-1 + metal_grain::N_react); the value
+//    is the compact k_rxn index, or -1 for a coefficient this model does not keep.
+//    Standard reactions keep both directions, the CR and charge-transfer blocks the
+//    forward only, the freeze-out reactions their full grain-surface slot.  The
+//    grain-catalysed 2H+grain->H2 slot (compact num rxn_2H_grain, the kept full
+//    num 23) takes the closed-form surface coefficient kgr[127] once the grain
+//    rates are written, as 2D+grain->HD (full num 144) takes kgr[128] through
+//    k_rxn[143].  Built from the keep lists, so it cannot drift from the topology.
+inline constexpr std::array<int, 2 * metal_grain::N_react>
+make_full_to_compact() {
+  constexpr int Nf = metal_grain::N_react;
+  std::array<int, 2 * Nf> m{};
+  for (int i = 0; i < 2 * Nf; ++i) m[i] = -1;
+  int s = 0;
+  for (int num : metal_grain::net::kMetalMinimalKeep) {
+    m[num - 1] = s;
+    m[num - 1 + Nf] = s + N_react;
+    ++s;
+  }
+  for (int num : metal_grain::net::kMetalMinimalCRKeep) m[num - 1] = s++;
+  for (int num : metal_grain::net::kMetalMinimalChargeKeep) m[num - 1] = s++;
+  int g = N_gas;
+  for (int num : metal_grain::net::kMetalMinimalGrainKeep)
+    m[metal_grain::slot::grain_surface_begin + num - 1] = g++;
+  m[metal_grain::slot::grain_surface_begin + 127] = special::rxn_2H_grain - 1;
+  return m;
+}
+inline constexpr std::array<int, 2 * metal_grain::N_react> kFullToCompact =
+    make_full_to_compact();
+
+// The full-network species this model carries: the partition functions its kept
+// reactions (and its Saha sub-table) need.
+inline constexpr std::array<bool, metal_grain::N_sp> make_kept_full_species() {
+  std::array<bool, metal_grain::N_sp> w{};
+  for (int i = 0; i < N_sp; ++i)
+    w[metal_grain::Species::local(Species::canonical(i))] = true;
+  return w;
+}
+inline constexpr std::array<bool, metal_grain::N_sp> kKeptFullSpecies =
+    make_kept_full_species();
 
 // Map a full-network table index (real species 0..N_sp_full-1, or a sentinel
 // VACANT/PHOTON/CR at N_sp_full + {0,1,2}) into the compact index space.  A

@@ -9,9 +9,9 @@
 // policy, and cooling-index accessors.  Kernel templates parameterised on
 // `template<class Model>` use these via Model::N_sp, Model::SahaPolicy, etc.
 //
-//   Nakauchi2021          — metal + grain (metal_grain, 89 species, 1200
+//   Nakauchi2021          — metal + grain (metal_grain, 95 species, 1200
 //                           reactions)
-//   Nakauchi2021_Minimal  — compact metal_grain network (40 species, 103
+//   Nakauchi2021_Minimal  — compact metal_grain network (44 species, 103
 //                           gas-phase + 10 grain-surface reactions); a
 //                           first-class composed model, not a mask over
 //                           Nakauchi2021
@@ -44,14 +44,15 @@ struct Nakauchi2021 {
   static constexpr bool has_escape = true;
   static constexpr bool has_uv_shield = true;
 
-  static constexpr int nr_max_iter = 60;
-  static constexpr bool catastrophic_detect_always = false;
-  static constexpr bool has_in_loop_divergence_guard = true;
-  static constexpr int equichem_dy_count = 63;
-  static constexpr bool secant_skip_high_density = false;
-
   static constexpr int cr_heat_var_begin = metal_grain::cr_heat_var_begin;
   static constexpr int cr_heat_var_end = metal_grain::cr_heat_var_end;
+
+  // Grain evaporation (solve/grain_evaporation.h): Na and K are locked in the
+  // dust too, and a net positive grain charge released goes to K+ (from K).
+  struct grain_evaporation {
+    static constexpr bool has_na_k = true;
+    static constexpr bool has_gr2p = true;
+  };
 
   struct cooling {
     // Composable cooling terms carried by this model (see
@@ -107,21 +108,21 @@ struct Nakauchi2021 {
 // ---------------------------------------------------------------------------
 // Nakauchi2021_Minimal  (compact metal_grain reduced network)
 //
-// A first-class composed model carrying only its 40 species and 103 gas-phase
+// A first-class composed model carrying only its 44 species and 103 gas-phase
 // reactions (68 standard + 8 cosmic-ray + 27 ion-grain charge transfer), plus
-// 10 grain-surface freeze-out reactions (metal_grain_minimal), so the linear
-// solve is 40x40.  Its forward rates are gathered in compute_base_rates'
-// is_compact_metal branch from the full metal_grain kernel run on a scratch
-// layout; its Saha uses MinimalMetalSaha; its cooling carries the He+
+// 10 grain-surface freeze-out reactions (metal_grain_minimal), so the coupled
+// Newton solves 45 unknowns.  compute_base_rates' is_compact_metal branch evaluates
+// its kept reactions -- and only those -- with the full network's laws, written straight
+// into the compact slots (metal_base_rates); its Saha uses MinimalMetalSaha; its cooling carries the He+
 // recombination term (has_he_ion) and the CR-producer loss / CR heating terms
 // (has_cr_loss), but omits the He++ and H2-He terms (those species/reactions
 // are not in the keep-set).
 // ---------------------------------------------------------------------------
 struct Nakauchi2021_Minimal {
-  using Sp = metal_grain_minimal::Sp;            // compact 40-species enum
-  using Species = metal_grain_minimal::Species;  // 40-species catalog selection
+  using Sp = metal_grain_minimal::Sp;            // compact 44-species enum
+  using Species = metal_grain_minimal::Species;  // 44-species catalog selection
   using SahaPolicy = MinimalMetalSaha;           // compact 4D Newton (Saha)
-  static constexpr int N_sp = metal_grain_minimal::N_sp;  // 40
+  static constexpr int N_sp = metal_grain_minimal::N_sp;  // 44
   // 113 k_rxn stride: 103 gas-phase reactions + a 10-wide grain-surface band.
   static constexpr int N_react = metal_grain_minimal::N_react;  // 113
   static constexpr RateForm rate_form = RateForm::MetalGrain;
@@ -136,21 +137,19 @@ struct Nakauchi2021_Minimal {
   // O/OH/CO/H2O/C ice-mantle freeze-out, not H2 physisorption shielding.
   static constexpr bool has_uv_shield = false;
 
-  static constexpr int nr_max_iter = 60;
-  static constexpr bool catastrophic_detect_always = false;
-  static constexpr bool has_in_loop_divergence_guard = true;
-  // The compact 4D Newton (MinimalMetalSaha) fills the 31 gas-phase species
-  // (indices 0..30 = H..Mg+); the grain charge states and ice-mantle species
-  // (31..39) are left unchanged, so the Saha dy-tracking spans 0..30.
-  static constexpr int equichem_dy_count = 31;
-  static constexpr bool secant_skip_high_density = false;
-
   // CR heating sums the four direct cosmic-ray ionization channels at the head
   // of the compact CR block (slots 68..71).
   static constexpr int cr_heat_var_begin =
       metal_grain_minimal::cr_heat_var_begin;  // 68
   static constexpr int cr_heat_var_end =
       metal_grain_minimal::cr_heat_var_end;  // 72
+
+  // Grain evaporation (solve/grain_evaporation.h): C, O and Mg are locked in
+  // the dust; the net grain charge released goes to the electrons.
+  struct grain_evaporation {
+    static constexpr bool has_na_k = false;
+    static constexpr bool has_gr2p = false;
+  };
 
   struct cooling {
     // He+ recombination cooling (has_he_ion) and the CR-producer loss / CR

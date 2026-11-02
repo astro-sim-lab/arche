@@ -20,7 +20,7 @@
 namespace arche {
 
 // ---------------------------------------------------------------------------
-// GrainState — grain temperature passed between cnt_cool and chemreact.
+// GrainState — grain temperature passed between the continuum and the rate kernel.
 // Kept outside ChemState to avoid mixing kernel-internal vs app-layer state.
 // ---------------------------------------------------------------------------
 struct GrainState {
@@ -241,6 +241,128 @@ inline void grtemp(double nH, double T_gas, double tau_cnt, double esc_cnt,
     }
   }
   T_gr = std::min(T_gr, T_gas);
+}
+
+// ---------------------------------------------------------------------------
+// grtemp_consistent — grtemp with the continuum optical depth solved together
+//
+// grtemp takes tau_cnt (and the escape fractions derived from it) as given. When the
+// caller builds tau from the PREVIOUS step's grain opacity, the grain temperature and
+// tau form a one-step lagged loop; where kp_gr(Td) is steep (Td ~ 400-430 K) its gain
+// can exceed one in magnitude, and the pair then oscillates with period two. The
+// fixed point of that loop is the root of ONE equation with tau written as a function
+// of Td,
+//   tau(Td) = (k_gas + Z_metal * kp_gr(rho, Td)) * column,
+//   esc_cnt = tau > 1 ? 1/tau^2 : 1,  esc_fact = 1 - exp(-tau),
+// which this function brackets by the same multiplicative search as grtemp and then
+// solves by Illinois false position to the bracket width grtemp's bisection stops at
+// (1e-12 relative), returning the end of the bracket on the same side (func <= 0). It
+// is a separate copy (not grtemp with a callable tau), so grtemp itself and every result
+// of the lagged path are unchanged.
+//
+// On entry:  T_gr is the initial guess.  k_gas is the gas opacity at T_gas [cm^2/g].
+// On exit:   T_gr = solution (clamped to <= T_gas); tau_cnt/esc_cnt/esc_fact at it.
+// ---------------------------------------------------------------------------
+inline void grtemp_consistent(double nH, double T_gas, double column,
+                              double k_gas, double Z_metal, double T_rad,
+                              double& T_gr, double& tau_cnt, double& esc_cnt,
+                              double& esc_fact) {
+  constexpr double yHe = abundance_ref::yHe;
+  constexpr double m_p = phys::m_p;
+  const double rho = (1.0 + 4.0 * yHe) * m_p * nH;
+  const double T_gas4 = std::pow(T_gas, 4.0);
+  const double T_rad4 = std::pow(T_rad, 4.0);
+
+  struct Depth {
+    double tau, esc, fact;
+  };
+  auto depth_kp = [&](double kp) {
+    Depth d;
+    d.tau = (k_gas + Z_metal * kp) * column;
+    d.esc = d.tau > 1.0 ? 1.0 / (d.tau * d.tau) : 1.0;
+    d.fact =
+        d.tau <= 1.0e-3 ? d.tau - 0.5 * d.tau * d.tau : 1.0 - std::exp(-d.tau);
+    return d;
+  };
+  auto funcL = [&](double Td) {
+    return 4.9e-2 * detail::vol_gr(rho, Td) * std::sqrt(T_gas * 1.0e-3) *
+           (1.0 - 0.8 * std::exp(-75.0 / T_gas)) * (T_gas - Td);
+  };
+  auto func = [&](double Td) {
+    const double kp = detail::kp_gr(rho, Td);
+    const Depth d = depth_kp(kp);
+    return kp * std::pow(Td, 4.0) * d.esc - nH * funcL(Td) -
+           kp * (T_gas4 * d.fact + T_rad4 * std::exp(-d.tau));
+  };
+  auto finish = [&]() {
+    const Depth d = depth_kp(detail::kp_gr(rho, T_gr));
+    tau_cnt = d.tau;
+    esc_cnt = d.esc;
+    esc_fact = d.fact;
+  };
+
+  const double f0 = func(T_gr);
+  if (f0 == 0.0) {
+    T_gr = T_gas;
+    finish();
+    return;
+  }  // dust evaporated: kp≈0,vol_gr≈0 → T_gr=T_gas
+
+  // Bracket by 1% steps away from the guess; the guess is the other end.
+  double x_l = T_gr, x_u = T_gr, f_l = f0, f_u = f0;
+  if (f0 > 0.0) {
+    for (int i = 0; i < 1000; ++i) {
+      x_l *= 0.99;
+      f_l = func(x_l);
+      if (f_l < 0.0) break;
+    }
+  } else {
+    for (int i = 0; i < 1000; ++i) {
+      x_u *= 1.01;
+      f_u = func(x_u);
+      if (f_u > 0.0) break;
+    }
+  }
+
+  if (f_u == 0.0) {
+    T_gr = std::min(x_u, T_gas);
+    finish();
+    return;
+  }
+  if (f_u * f_l >= 0.0) {
+    // bracketing failed — return initial guess (as grtemp does)
+    T_gr = std::min(T_gr, T_gas);
+    finish();
+    return;
+  }
+
+  // Illinois false position on [x_l, x_u]: func changes sign across it.
+  double a = x_l, fa = f_l, b = x_u, fb = f_u;
+  int side = 0;
+  for (int j = 0; j < 200; ++j) {
+    if (std::abs(b - a) < 1.0e-12 * std::max(std::abs(a), std::abs(b))) break;
+    double c = (a * fb - b * fa) / (fb - fa);
+    if (!(c > std::min(a, b) && c < std::max(a, b))) c = 0.5 * (a + b);
+    const double fc = func(c);
+    if (fc == 0.0) {
+      a = b = c;
+      fa = fb = 0.0;
+      break;
+    }
+    if ((fc > 0.0) == (fb > 0.0)) {
+      b = c;
+      fb = fc;
+      if (side == -1) fa *= 0.5;
+      side = -1;
+    } else {
+      a = c;
+      fa = fc;
+      if (side == +1) fb *= 0.5;
+      side = +1;
+    }
+  }
+  T_gr = std::min(fa <= 0.0 ? a : b, T_gas);
+  finish();
 }
 
 // ---------------------------------------------------------------------------

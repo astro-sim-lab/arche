@@ -31,12 +31,235 @@
 //                                    k_rxn[0..2*N_react-1].
 //   compute_rates<Model>(...)      — dy/dt (r_f) and Jacobian (dr_fdy) from
 //                                    k_rxn and the abundance vector y.
+//   compute_rhs<Model>(...)        — dy/dt (r_f) alone.
+//   compute_jacobian<Model>(...)   — the Jacobian (dr_fdy) alone.
 //
 // All rate coefficients in CGS (cm³/s or cm⁶/s for 3-body). k_rxn indexing:
 // k_rxn[num-1] = forward, k_rxn[num-1+N_react] = reverse (1-based num).
 // ---------------------------------------------------------------------------
 
 namespace arche {
+
+// ---------------------------------------------------------------------------
+// metal_base_rates
+//
+// Forward + reverse rate coefficients of the metal_grain network (full table
+// `tbl`), written through a rate sink (kinetics/rates.h) and addressed by the full
+// network's indices.  Every law, reverse rate and correction is evaluated only for
+// an index the sink keeps, and the partition functions only for the species
+// want_sp(i) asks for.  The full network (Nakauchi2021) passes DirectRates and every
+// species; the compact Nakauchi2021_Minimal passes its full->compact slot map and its
+// own species, so it evaluates exactly its kept reactions with the full network's
+// laws (the same expressions, in the same order).
+// ---------------------------------------------------------------------------
+template <class K, class WantSp>
+void metal_base_rates(double nH, double T_K, double mu,
+                      const ChemParams& params, const MetalGrainTable& tbl,
+                      K& k_rxn, WantSp want_sp) {
+  constexpr int N_sp = metal_grain::N_sp;
+  constexpr int N_react = metal_grain::N_react;
+  constexpr double k_B = phys::k_B;
+  constexpr double h_P = phys::h_P;
+  constexpr double pi = phys::pi;
+  constexpr double G = phys::G;
+  constexpr double m_p = phys::m_p;
+  constexpr double yHe = abundance_ref::yHe;
+  auto zero = [&](int i) {
+    if (k_rxn.want(i)) k_rxn[i] = 0.0;
+  };
+
+  // Species-independent intermediates (temperature powers, LTE critical
+  // densities, LTE/low-density blend sub-rates) built once and shared by the
+  // forward rate laws and the reverse / LTE-correction step below.
+  PrimRateContext c = build_prim_context(T_K, nH, params.H, params.H2,
+                                         params.He, tbl.reactions[21].delE);
+  double T300 = c.T300;
+  double crit_ratio = c.crit_ratio;
+  double crit_ratio_HD = c.crit_ratio_HD;
+
+  // rho — parenthesization preserved per model for FP bit identity
+  double rho = nH * (1.0 + 4.0 * yHe) * m_p;
+
+  double lmbd_J = std::sqrt(pi * k_B * T_K / (G * mu * m_p * rho));
+  double kap = detail::eval_opacity(T_K, rho);
+
+  double tau_cnt;
+  {
+    double k_gr = detail::kp_gr(rho, params.T_gr_K) * params.Z_metal;
+    tau_cnt = (kap + k_gr) * rho * lmbd_J;
+  }
+
+  std::array<double, N_sp + 3> pf;
+  eval_metal_partition_functions<N_sp, N_react>(T_K, tbl, pf, want_sp);
+
+  // -----------------------------------------------------------------------
+  // H/He/D forward rates (k_rxn[0..99], shared GA08 network)
+  // -----------------------------------------------------------------------
+  compute_HHeD_rates<Nakauchi2021::rate_form>(k_rxn, c);
+
+  // Zero-forcing (common H/He)
+  zero(10);
+  zero(12);
+  zero(19);
+  zero(24);  // metal zeroes k_rxn[24], not k_rxn[30]
+  zero(39);
+  zero(40);
+  zero(42);
+
+  // Zero-forcing (D)
+  zero(52);
+  zero(57);
+  zero(58);
+  zero(66);
+  zero(70);
+  zero(73);
+  zero(74);
+  zero(92);
+  zero(93);
+  zero(94);
+  zero(95);
+  zero(96);
+
+  // Blend sub-rates shared with the reverse / LTE-correction step below.
+  double k12LTE = c.k12LTE;
+  double k13v0 = c.k13v0;
+  double k21LTE = c.k21LTE;
+  double k37LTE = c.k37LTE;
+  double k40v0 = c.k40v0;
+  double k75v0 = c.k75v0;
+
+  // Metal reactions k_rxn[100..542] + k_rxn[600..644]
+  compute_metal_rates(k_rxn, T_K, T300);
+  // Li reactions k_rxn[800..829]
+  compute_Li_rates(k_rxn, T_K, T300, tbl.reactions[634].delE);
+  // K, Na, Mg reactions k_rxn[700..729]
+  compute_KNaMg_rates(k_rxn, T_K, T300, tbl.reactions[576].delE,
+                      tbl.reactions[591].delE);
+
+  // -----------------------------------------------------------------------
+  // Reverse rates via detailed balance.  lnKeqb starts as NaN: the loop fills the
+  // kept reactions, and a correction below that read any other would yield NaN.
+  // -----------------------------------------------------------------------
+  std::array<double, N_react> lnKeqb;
+  lnKeqb.fill(std::numeric_limits<double>::quiet_NaN());
+  compute_reverse_loop_into<RateForm::MetalGrain, N_sp, N_react>(
+      k_rxn, T_K, tau_cnt, metal_grain::loop::n_std, tbl, pf, lnKeqb);
+
+  // -----------------------------------------------------------------------
+  // Post-reverse LTE/low-density corrections
+  // -----------------------------------------------------------------------
+  const double lnC1_base = std::log(2.0 * pi * k_B * T_K / (h_P * h_P));
+
+  // Reaction 273 special case (4-body)
+  if (k_rxn.want(272 + N_react)) {
+    constexpr double Cm273 = 1.01e71;
+    constexpr double dE273 = 7.80e-12;
+    double lnC1_273 = -3.0 * lnC1_base;
+    double lnCpf_273 = std::log(pf[8]) + std::log(pf[21]) - std::log(pf[0]) -
+                       std::log(pf[1]) - std::log(pf[7]) - std::log(pf[24]);
+    double lnK273 =
+        lnC1_273 + std::log(Cm273) + lnCpf_273 - dE273 / (k_B * T_K);
+    k_rxn[272 + N_react] = std::exp(std::log(k_rxn[272]) + lnK273);
+  }
+
+  // k_rxn(8+N_react): H- + H -> H2 + e reverse
+  if (k_rxn.want(rxn::Hm_H_to_H2_e + N_react)) {
+    double k40LTE = std::exp(std::log(k_rxn[rxn::Hm_H_to_H2_e]) +
+                             lnKeqb[rxn::Hm_H_to_H2_e]);
+    k_rxn[rxn::Hm_H_to_H2_e + N_react] = lte_blend(k40v0, k40LTE, crit_ratio);
+  }
+
+  // k_rxn(12+N_react)
+  if (k_rxn.want(11 + N_react)) {
+    double lnk12rev = std::log(k12LTE) + lnKeqb[11];
+    k_rxn[11 + N_react] = std::exp(lnk12rev);
+  }
+
+  // k_rxn(19+N_react)
+  if (k_rxn.want(rxn::three_H + N_react)) {
+    double k13LTE_rev =
+        std::exp(std::log(k_rxn[rxn::three_H]) + lnKeqb[rxn::three_H]);
+    k_rxn[rxn::three_H + N_react] = lte_blend(k13v0, k13LTE_rev, crit_ratio);
+  }
+
+  // k_rxn(21+N_react)
+  if (k_rxn.want(rxn::H2H2_dis + N_react)) {
+    double lnk21rev = std::log(k21LTE) + lnKeqb[rxn::H2H2_dis];
+    k_rxn[rxn::H2H2_dis + N_react] = std::exp(lnk21rev);
+  }
+
+  // k_rxn(37+N_react)
+  if (k_rxn.want(rxn::H2_He_dis + N_react)) {
+    double lnk37rev = std::log(k37LTE) + lnKeqb[rxn::H2_He_dis];
+    k_rxn[rxn::H2_He_dis + N_react] = std::exp(lnk37rev);
+  }
+
+  // k_rxn(47+N_react)
+  if (k_rxn.want(46 + N_react)) {
+    double k47LTE_val = std::exp(std::log(k_rxn[46]) + lnKeqb[46]);
+    double k47v0_val =
+        5.09e-9 * std::pow(T_K, 0.128) * std::exp(-103258.0 / T_K);
+    k_rxn[46 + N_react] = lte_blend(k47v0_val, k47LTE_val, crit_ratio_HD);
+  }
+
+  // k_rxn(48+N_react)
+  if (k_rxn.want(47 + N_react)) {
+    double lnk48rev = std::log(k37LTE) + lnKeqb[47];
+    k_rxn[47 + N_react] = std::exp(lnk48rev);
+  }
+
+  // k_rxn(49+N_react)
+  if (k_rxn.want(48 + N_react)) {
+    double lnk49rev = std::log(k21LTE) + lnKeqb[48];
+    k_rxn[48 + N_react] = std::exp(lnk49rev);
+  }
+
+  // k_rxn(50+N_react)
+  if (k_rxn.want(49 + N_react)) {
+    double k13LTE_db =
+        std::exp(std::log(k_rxn[rxn::three_H]) + lnKeqb[rxn::three_H]);
+    double lnk50rev = std::log(k13LTE_db) + lnKeqb[49];
+    k_rxn[49 + N_react] = std::exp(lnk50rev);
+  }
+
+  // k_rxn(68+N_react)
+  if (k_rxn.want(67 + N_react)) {
+    double k75LTE_val = std::exp(std::log(k_rxn[67]) + lnKeqb[67]);
+    k_rxn[67 + N_react] = lte_blend(k75v0, k75LTE_val, crit_ratio_HD);
+  }
+
+  // Suppress He ionization reversal at low crit_ratio
+  if (crit_ratio < 1.0) {
+    zero(0 + N_react);
+    zero(2 + N_react);
+  }
+
+  // T <= 300K: zero specific reverse rates
+  if (T_K <= 300.0) {
+    zero(101 + N_react);
+    zero(106 + N_react);
+    zero(108 + N_react);
+    zero(113 + N_react);
+    zero(133 + N_react);
+    zero(137 + N_react);
+    zero(138 + N_react);
+    zero(140 + N_react);
+    zero(141 + N_react);
+    zero(174 + N_react);
+    zero(181 + N_react);
+    zero(229 + N_react);
+    zero(539 + N_react);
+    zero(602 + N_react);
+  }
+
+  // Grain rates
+  compute_grain_rates(k_rxn, T_K, params.T_gr_K, rho, nH, params.Z_metal,
+                      params.J_H2, params.J_H2O, params.J_tot, params.zeta,
+                      params.T_cr_desorp);
+
+  // CR rates
+  compute_CR_rates_metal(k_rxn, params.zeta, T300);
+}
 
 // ---------------------------------------------------------------------------
 // compute_base_rates<Model>
@@ -56,7 +279,6 @@ void compute_base_rates(double nH, double T_K, double mu,
   k_rxn.fill(0.0);
 
   constexpr double k_B = phys::k_B;
-  constexpr double h_P = phys::h_P;
   constexpr double pi = phys::pi;
   constexpr double G = phys::G;
   constexpr double m_p = phys::m_p;
@@ -139,104 +361,46 @@ void compute_base_rates(double nH, double T_K, double mu,
     return;
   }
 
-  // ── Compact metal Minimal model (Nakauchi2021_Minimal): strategy-1 rate
-  //    path.  The compact forward/reverse coefficients are gathered from a full
-  //    metal_grain coefficient run (the metal forward laws write full slots, so
-  //    they cannot be re-bound per compact slot the way the primordial compact
-  //    path is — see the rate-path design note).  The gather reads the kept
-  //    reactions out of the full k_rxn by num and writes them into the compact
-  //    slots, using the full PF-loaded table the runtime owns alongside the
-  //    compact table.  That table is supplied when the compact metal runtime is
-  //    constructed (rate-gather phase); falling through to the full-network path
-  //    below would index k_rxn slots far outside the compact stride, so this
-  //    path is guarded until the gather is wired. ──
+  // ── Compact metal Minimal model (Nakauchi2021_Minimal): its kept reactions are
+  //    evaluated with the full network's laws (metal_base_rates on the full
+  //    PF-loaded table the runtime owns alongside the compact table), each written
+  //    straight into its compact slot through the full->compact slot map; nothing
+  //    outside the keep-set is evaluated. ──
   if constexpr (Model::is_compact_metal) {
-    // Run the full metal_grain coefficient kernel on the runtime-owned full
-    // table, then gather the kept reactions into the compact slots.  The full
-    // forward laws write full slots, so re-using the full path verbatim keeps
-    // the kept coefficients bit-for-bit identical to the full model.
-    constexpr int Nf = metal_grain::N_react;
-    static thread_local std::array<double, 2 * Nf> k_full;
-    compute_base_rates<Nakauchi2021>(nH, T_K, mu, params, *tbl.aux_full_metal,
-                                     k_full);
-
-    namespace net = metal_grain::net;
-    int s = 0;
-    // Standard block: forward + detailed-balance reverse.
-    for (int full_num : net::kMetalMinimalKeep) {
-      k_rxn[s] = k_full[full_num - 1];
-      k_rxn[s + N_react] = k_full[full_num - 1 + Nf];
-      ++s;
-    }
-    // Cosmic-ray block: first-order, forward only.
-    for (int full_num : net::kMetalMinimalCRKeep)
-      k_rxn[s++] = k_full[full_num - 1];
-    // Ion-grain charge transfer: first-order, forward only.
-    for (int full_num : net::kMetalMinimalChargeKeep)
-      k_rxn[s++] = k_full[full_num - 1];
-    // Grain-surface freeze-out: forward rates land in the grain band
-    // (k_rxn[N_gas..]); the full slot is grain_surface_begin + (kgr num - 1).
-    int g = metal_grain_minimal::N_gas;
-    for (int grain_num : net::kMetalMinimalGrainKeep)
-      k_rxn[g++] =
-          k_full[metal_grain::slot::grain_surface_begin + grain_num - 1];
-    // Grain-catalysed H2 / HD formation.  The full network builds these from
-    // physisorbed H/D atoms on the grain surface (H_p + H_p -> H2, H_p + D_p ->
-    // HD), whose intermediate species the compact network does not carry.  The
-    // closed-form Cazaux & Tielens surface-formation coefficients
-    // (kgr[127] = H+H->H2, kgr[128] = H+D->HD) reproduce that formation rate
-    // directly from the gas-phase H/D abundances, so the compact model routes
-    // them into the special grain reactions 2H+grain->H2 and 2D+grain->HD whose
-    // forward rate is k * y[H or D] * nH (see compute_rates special branch).
-    // Without this the gathered coefficient is the gas-phase k_rxn[22]/[143],
-    // which are identically zero, leaving H2 grain formation absent.
-    k_rxn[metal_grain_minimal::special::rxn_2H_grain - 1] =
-        k_full[metal_grain::slot::grain_surface_begin + 127];
-    k_rxn[metal_grain_minimal::special::rxn_2D_grain - 1] =
-        k_full[metal_grain::slot::grain_surface_begin + 128];
+    MappedRates k{k_rxn.data(), metal_grain_minimal::kFullToCompact.data()};
+    metal_base_rates(nH, T_K, mu, params, *tbl.aux_full_metal, k, [](int i) {
+      return metal_grain_minimal::kKeptFullSpecies[i];
+    });
     return;
   }
 
-  // Generic full-network path (primordial and full metal).  Guarded so it is
-  // not instantiated for the compact metal model, whose has_grain branches
-  // below would otherwise index full-network slots that do not exist in the
-  // compact table; that model returns from the gather branch above.
-  if constexpr (!Model::is_compact_metal) {
+  // ── Full metal_grain network: every reaction. ──
+  if constexpr (Model::has_grain && !Model::is_compact_metal) {
+    DirectRates<N_react> k{k_rxn};
+    metal_base_rates(nH, T_K, mu, params, tbl, k, [](int) { return true; });
+    return;
+  }
+
+  // Full primordial network (both metal models returned above).
+  if constexpr (!Model::has_grain) {
     // Species-independent intermediates (temperature powers, LTE critical
     // densities, LTE/low-density blend sub-rates) built once and shared by the
     // forward rate laws and the reverse / LTE-correction step below.
     PrimRateContext c = build_prim_context(T_K, nH, params.H, params.H2,
                                            params.He, tbl.reactions[21].delE);
-    double T300 = c.T300;
     double crit_ratio = c.crit_ratio;
     double crit_ratio_HD = c.crit_ratio_HD;
 
     // rho — parenthesization preserved per model for FP bit identity
     double rho;
-    if constexpr (Model::has_grain) {
-      rho = nH * (1.0 + 4.0 * yHe) * m_p;
-    } else {
-      rho = nH * ((1.0 + 4.0 * yHe) * m_p);
-    }
-
+    rho = nH * ((1.0 + 4.0 * yHe) * m_p);
     double lmbd_J = std::sqrt(pi * k_B * T_K / (G * mu * m_p * rho));
     double kap = detail::eval_opacity(T_K, rho);
 
     double tau_cnt;
-    if constexpr (Model::has_grain) {
-      double k_gr = detail::kp_gr(rho, params.T_gr_K) * params.Z_metal;
-      tau_cnt = (kap + k_gr) * rho * lmbd_J;
-    } else {
-      tau_cnt = kap * rho * lmbd_J;
-    }
-
+    tau_cnt = kap * rho * lmbd_J;
     std::array<double, N_sp + 3> pf;
-    if constexpr (Model::has_grain) {
-      eval_metal_partition_functions<N_sp, N_react>(T_K, tbl, pf);
-    } else {
-      pf_prim::eval_pf_set<typename Model::Species, N_react>(T_K, tbl, pf);
-    }
-
+    pf_prim::eval_pf_set<typename Model::Species, N_react>(T_K, tbl, pf);
     // -----------------------------------------------------------------------
     // H/He/D forward rates (k_rxn[0..99], shared GA08 network)
     // -----------------------------------------------------------------------
@@ -246,23 +410,16 @@ void compute_base_rates(double nH, double T_K, double mu,
     k_rxn[10] = 0.0;
     k_rxn[12] = 0.0;
     k_rxn[19] = 0.0;
-    if constexpr (Model::has_grain) {
-      k_rxn[24] = 0.0;  // metal zeroes k_rxn[24], not k_rxn[30]
-    } else {
-      k_rxn[30] = 0.0;  // primordial zeroes k_rxn[30], not k_rxn[24]
-    }
+    k_rxn[30] = 0.0;  // primordial zeroes k_rxn[30], not k_rxn[24]
     k_rxn[39] = 0.0;
     k_rxn[40] = 0.0;
     k_rxn[42] = 0.0;
 
     // Primordial k_rxn[13] threshold
-    if constexpr (!Model::has_grain) {
-      if (phys::k_B_eV * T_K <= 0.04) {
-        k_rxn[rxn::Hm_e_to_H_2e] = 0.0;
-        k_rxn[78] = 0.0;
-      }
+    if (phys::k_B_eV * T_K <= 0.04) {
+      k_rxn[rxn::Hm_e_to_H_2e] = 0.0;
+      k_rxn[78] = 0.0;
     }
-
     // Zero-forcing (D)
     k_rxn[52] = 0.0;
     k_rxn[57] = 0.0;
@@ -288,279 +445,145 @@ void compute_base_rates(double nH, double T_K, double mu,
     // -----------------------------------------------------------------------
     // Model-specific forward rates beyond H/He/D
     // -----------------------------------------------------------------------
-    if constexpr (Model::has_grain) {
-      // Metal reactions k_rxn[100..542] + k_rxn[600..644]
-      compute_metal_rates<N_react>(k_rxn, T_K, T300);
-      // Li reactions k_rxn[800..829]
-      compute_Li_rates<N_react>(k_rxn, T_K, T300, tbl.reactions[634].delE);
-      // K, Na, Mg reactions k_rxn[700..729]
-      compute_KNaMg_rates<N_react>(k_rxn, T_K, T300, tbl.reactions[576].delE,
-                                   tbl.reactions[591].delE);
-    } else {
-      // Primordial Li reactions k_rxn[100..129] (bind reaction slots to laws)
-      namespace rl = ratelaw::prim;
-      k_rxn[100] = rl::r100_e_Lip_to_Li(c);
-      k_rxn[101] = rl::r101_Hm_Lip_to_H_Li(c);
-      k_rxn[102] = rl::r102_Hp_Lim_to_H_Li(c);
-      k_rxn[103] = rl::r103_e_Li_to_Lim(c);
-      k_rxn[104] = rl::r104_Hp_Li_to_H_Lip(c);
-      k_rxn[105] = rl::r105_Hp_Li_to_H_Lip_ph(c);
-      k_rxn[106] = rl::r106_Hm_Li_to_e_LiH(c);
-      k_rxn[107] = rl::r107_H_Lim_to_e_LiH(c);
-      k_rxn[108] = rl::r108_H_LiHp_to_Hp_LiH(c);
-      k_rxn[109] = rl::r109_Hp_LiH_to_H_LiHp(c);
-      k_rxn[110] = rl::r110_H_LiH_to_H2_Li(c);
-      k_rxn[111] = rl::r111_H_Lip_to_LiHp(c);
-      k_rxn[112] = rl::r112_Hp_Li_to_LiHp(c);
-      k_rxn[113] = rl::r113_Hp_LiH_to_H2_Lip(c);
-      k_rxn[114] = rl::r114_e_LiHp_to_H_Li(c);
-      k_rxn[115] = rl::r115_H_LiHp_to_H2p_Li(c);
-      k_rxn[116] = rl::r116_H_LiHp_to_H2_Lip(c);
-      k_rxn[117] = rl::r117_H_Li_to_LiH(c);
-      k_rxn[118] = rl::r118_H2p_Li_to_Hp_LiH(c);
-      k_rxn[119] = rl::r119_Hp_LiH_to_H2p_Li(c);
-      k_rxn[120] = rl::r120_e_Lipp_to_Lip(c);
-      k_rxn[121] = rl::r121_e_Lippp_to_Lipp(c);
-      k_rxn[122] = rl::r122_Dm_Lip_to_D_Li(c);
-      k_rxn[123] = rl::r123_Dp_Lim_to_D_Li(c);
-      k_rxn[124] = rl::r124_e_Li_to_2e_Lip(c);
-      k_rxn[125] = rl::r125_e_Lip_to_2e_Lipp(c);
-      k_rxn[126] = rl::r126_e_Lipp_to_2e_Lippp(c);
-      k_rxn[127] = rl::r127_2H_Li_to_H_LiH(c);
-      k_rxn[128] = rl::r128_H_H2_Li_to_H2_LiH(c);
-      k_rxn[129] = rl::r129_H2_Li_to_H2_e_Lip(c, tbl.reactions[129].delE);
+    // Primordial Li reactions k_rxn[100..129] (bind reaction slots to laws)
+    namespace rl = ratelaw::prim;
+    k_rxn[100] = rl::r100_e_Lip_to_Li(c);
+    k_rxn[101] = rl::r101_Hm_Lip_to_H_Li(c);
+    k_rxn[102] = rl::r102_Hp_Lim_to_H_Li(c);
+    k_rxn[103] = rl::r103_e_Li_to_Lim(c);
+    k_rxn[104] = rl::r104_Hp_Li_to_H_Lip(c);
+    k_rxn[105] = rl::r105_Hp_Li_to_H_Lip_ph(c);
+    k_rxn[106] = rl::r106_Hm_Li_to_e_LiH(c);
+    k_rxn[107] = rl::r107_H_Lim_to_e_LiH(c);
+    k_rxn[108] = rl::r108_H_LiHp_to_Hp_LiH(c);
+    k_rxn[109] = rl::r109_Hp_LiH_to_H_LiHp(c);
+    k_rxn[110] = rl::r110_H_LiH_to_H2_Li(c);
+    k_rxn[111] = rl::r111_H_Lip_to_LiHp(c);
+    k_rxn[112] = rl::r112_Hp_Li_to_LiHp(c);
+    k_rxn[113] = rl::r113_Hp_LiH_to_H2_Lip(c);
+    k_rxn[114] = rl::r114_e_LiHp_to_H_Li(c);
+    k_rxn[115] = rl::r115_H_LiHp_to_H2p_Li(c);
+    k_rxn[116] = rl::r116_H_LiHp_to_H2_Lip(c);
+    k_rxn[117] = rl::r117_H_Li_to_LiH(c);
+    k_rxn[118] = rl::r118_H2p_Li_to_Hp_LiH(c);
+    k_rxn[119] = rl::r119_Hp_LiH_to_H2p_Li(c);
+    k_rxn[120] = rl::r120_e_Lipp_to_Lip(c);
+    k_rxn[121] = rl::r121_e_Lippp_to_Lipp(c);
+    k_rxn[122] = rl::r122_Dm_Lip_to_D_Li(c);
+    k_rxn[123] = rl::r123_Dp_Lim_to_D_Li(c);
+    k_rxn[124] = rl::r124_e_Li_to_2e_Lip(c);
+    k_rxn[125] = rl::r125_e_Lip_to_2e_Lipp(c);
+    k_rxn[126] = rl::r126_e_Lipp_to_2e_Lippp(c);
+    k_rxn[127] = rl::r127_2H_Li_to_H_LiH(c);
+    k_rxn[128] = rl::r128_H_H2_Li_to_H2_LiH(c);
+    k_rxn[129] = rl::r129_H2_Li_to_H2_e_Lip(c, tbl.reactions[129].delE);
 
-      // Zero out disabled Li reactions
-      k_rxn[108] = 0.0;
-      k_rxn[119] = 0.0;
-    }
-
+    // Zero out disabled Li reactions
+    k_rxn[108] = 0.0;
+    k_rxn[119] = 0.0;
     // -----------------------------------------------------------------------
     // Reverse rates via detailed balance
     // -----------------------------------------------------------------------
     std::array<double, N_react> lnKeqb{};
-    if constexpr (Model::has_grain) {
-      compute_reverse_loop<RateForm::MetalGrain, N_sp, N_react>(
-          k_rxn, T_K, tau_cnt, metal_grain::loop::n_std, tbl, pf, lnKeqb);
-    } else {
-      compute_reverse_loop<RateForm::Primordial, N_sp, N_react>(
-          k_rxn, T_K, tau_cnt, zero_metal::loop::n_std, tbl, pf, lnKeqb);
-    }
-
+    compute_reverse_loop<RateForm::Primordial, N_sp, N_react>(
+        k_rxn, T_K, tau_cnt, zero_metal::loop::n_std, tbl, pf, lnKeqb);
     // -----------------------------------------------------------------------
     // Post-reverse LTE/low-density corrections
     // -----------------------------------------------------------------------
-    if constexpr (Model::has_grain) {
-      // ─── Metal LTE corrections ───────────────────────────────────────────
-      const double lnC1_base = std::log(2.0 * pi * k_B * T_K / (h_P * h_P));
-
-      // Reaction 273 special case (4-body)
-      {
-        constexpr double Cm273 = 1.01e71;
-        constexpr double dE273 = 7.80e-12;
-        double lnC1_273 = -3.0 * lnC1_base;
-        double lnCpf_273 = std::log(pf[8]) + std::log(pf[21]) -
-                           std::log(pf[0]) - std::log(pf[1]) - std::log(pf[7]) -
-                           std::log(pf[24]);
-        double lnK273 =
-            lnC1_273 + std::log(Cm273) + lnCpf_273 - dE273 / (k_B * T_K);
-        k_rxn[272 + N_react] = std::exp(std::log(k_rxn[272]) + lnK273);
-      }
-
-      // k_rxn(8+N_react): H- + H -> H2 + e reverse
-      {
-        double k40LTE = std::exp(std::log(k_rxn[rxn::Hm_H_to_H2_e]) +
-                                 lnKeqb[rxn::Hm_H_to_H2_e]);
-        k_rxn[rxn::Hm_H_to_H2_e + N_react] =
-            lte_blend(k40v0, k40LTE, crit_ratio);
-      }
-
-      // k_rxn(12+N_react)
-      {
-        double lnk12rev = std::log(k12LTE) + lnKeqb[11];
-        k_rxn[11 + N_react] = std::exp(lnk12rev);
-      }
-
-      // k_rxn(19+N_react)
-      {
-        double k13LTE_rev =
-            std::exp(std::log(k_rxn[rxn::three_H]) + lnKeqb[rxn::three_H]);
-        k_rxn[rxn::three_H + N_react] =
-            lte_blend(k13v0, k13LTE_rev, crit_ratio);
-      }
-
-      // k_rxn(21+N_react)
-      {
-        double lnk21rev = std::log(k21LTE) + lnKeqb[rxn::H2H2_dis];
-        k_rxn[rxn::H2H2_dis + N_react] = std::exp(lnk21rev);
-      }
-
-      // k_rxn(37+N_react)
-      {
-        double lnk37rev = std::log(k37LTE) + lnKeqb[rxn::H2_He_dis];
-        k_rxn[rxn::H2_He_dis + N_react] = std::exp(lnk37rev);
-      }
-
-      // k_rxn(47+N_react)
-      {
-        double k47LTE_val = std::exp(std::log(k_rxn[46]) + lnKeqb[46]);
-        double k47v0_val =
-            5.09e-9 * std::pow(T_K, 0.128) * std::exp(-103258.0 / T_K);
-        k_rxn[46 + N_react] = lte_blend(k47v0_val, k47LTE_val, crit_ratio_HD);
-      }
-
-      // k_rxn(48+N_react)
-      {
-        double lnk48rev = std::log(k37LTE) + lnKeqb[47];
-        k_rxn[47 + N_react] = std::exp(lnk48rev);
-      }
-
-      // k_rxn(49+N_react)
-      {
-        double lnk49rev = std::log(k21LTE) + lnKeqb[48];
-        k_rxn[48 + N_react] = std::exp(lnk49rev);
-      }
-
-      // k_rxn(50+N_react)
-      {
-        double k13LTE_db =
-            std::exp(std::log(k_rxn[rxn::three_H]) + lnKeqb[rxn::three_H]);
-        double lnk50rev = std::log(k13LTE_db) + lnKeqb[49];
-        k_rxn[49 + N_react] = std::exp(lnk50rev);
-      }
-
-      // k_rxn(68+N_react)
-      {
-        double k75LTE_val = std::exp(std::log(k_rxn[67]) + lnKeqb[67]);
-        k_rxn[67 + N_react] = lte_blend(k75v0, k75LTE_val, crit_ratio_HD);
-      }
-
-      // Suppress He ionization reversal at low crit_ratio
-      if (crit_ratio < 1.0) {
-        k_rxn[0 + N_react] = 0.0;
-        k_rxn[2 + N_react] = 0.0;
-      }
-
-      // T <= 300K: zero specific reverse rates
-      if (T_K <= 300.0) {
-        k_rxn[101 + N_react] = 0.0;
-        k_rxn[106 + N_react] = 0.0;
-        k_rxn[108 + N_react] = 0.0;
-        k_rxn[113 + N_react] = 0.0;
-        k_rxn[133 + N_react] = 0.0;
-        k_rxn[137 + N_react] = 0.0;
-        k_rxn[138 + N_react] = 0.0;
-        k_rxn[140 + N_react] = 0.0;
-        k_rxn[141 + N_react] = 0.0;
-        k_rxn[174 + N_react] = 0.0;
-        k_rxn[181 + N_react] = 0.0;
-        k_rxn[229 + N_react] = 0.0;
-        k_rxn[539 + N_react] = 0.0;
-        k_rxn[602 + N_react] = 0.0;
-      }
-
-      // Grain rates
-      compute_grain_rates<N_react>(
-          k_rxn, T_K, params.T_gr_K, rho, nH, params.Z_metal, params.J_H2,
-          params.J_H2O, params.J_tot, params.zeta, params.T_cr_desorp);
-
-      // CR rates
-      compute_CR_rates_metal<N_react>(k_rxn, params.zeta, T300);
-
-    } else {
-      // ─── Primordial LTE corrections ──────────────────────────────────────
-      // k_rxn(8+N_react)
-      {
-        double lnk40LTE =
-            std::log(k_rxn[rxn::Hm_H_to_H2_e]) + lnKeqb[rxn::Hm_H_to_H2_e];
-        double k40LTE = std::exp(lnk40LTE);
-        k_rxn[rxn::Hm_H_to_H2_e + N_react] =
-            lte_blend_noguard(k40v0, k40LTE, crit_ratio);
-      }
-
-      // k_rxn(12+N_react)
-      {
-        double lnk12rev = std::log(k12LTE) + lnKeqb[11];
-        k_rxn[11 + N_react] = std::exp(lnk12rev);
-      }
-
-      // k_rxn[18+N_react] — k13LTE declared at outer scope for k_rxn[49]
-      double k13LTE;
-      {
-        double lnk13LTE = std::log(k_rxn[rxn::three_H]) + lnKeqb[rxn::three_H];
-        k13LTE = std::exp(lnk13LTE);
-        k_rxn[rxn::three_H + N_react] =
-            lte_blend_noguard(k13v0, k13LTE, crit_ratio);
-      }
-
-      // k_rxn(21+N_react)
-      {
-        double lnk21rev = std::log(k21LTE) + lnKeqb[rxn::H2H2_dis];
-        k_rxn[rxn::H2H2_dis + N_react] = std::exp(lnk21rev);
-      }
-
-      // k_rxn(37+N_react)
-      {
-        double lnk37rev = std::log(k37LTE) + lnKeqb[rxn::H2_He_dis];
-        k_rxn[rxn::H2_He_dis + N_react] = std::exp(lnk37rev);
-      }
-
-      // k_rxn(47+N_react)
-      {
-        double k47LTE = c.k47LTE;
-        double lnk47rev = std::log(k47LTE) + lnKeqb[46];
-        k_rxn[46 + N_react] = std::exp(lnk47rev);
-      }
-
-      // k_rxn(48+N_react)
-      {
-        double lnk48rev = std::log(k37LTE) + lnKeqb[47];
-        k_rxn[47 + N_react] = std::exp(lnk48rev);
-      }
-
-      // k_rxn(49+N_react)
-      {
-        double lnk49rev = std::log(k21LTE) + lnKeqb[48];
-        k_rxn[48 + N_react] = std::exp(lnk49rev);
-      }
-
-      // k_rxn(50+N_react)
-      {
-        double lnk50rev = std::log(k13LTE) + lnKeqb[49];
-        k_rxn[49 + N_react] = std::exp(lnk50rev);
-      }
-
-      // k_rxn(68+N_react)
-      {
-        double lnk75LTE = std::log(k_rxn[67]) + lnKeqb[67];
-        double k75LTE = std::exp(lnk75LTE);
-        k_rxn[67 + N_react] = lte_blend_noguard(k75v0, k75LTE, crit_ratio_HD);
-      }
-
-      // Suppress He ionization reversal at low crit_ratio
-      if (crit_ratio < 1.0) {
-        k_rxn[0 + N_react] = 0.0;
-        k_rxn[2 + N_react] = 0.0;
-      }
-
-      // CR reactions k_rxn[130..138]
-      compute_CR_rates_prim<N_react>(k_rxn, params.zeta);
+    // ─── Primordial LTE corrections ──────────────────────────────────────
+    // k_rxn(8+N_react)
+    {
+      double lnk40LTE =
+          std::log(k_rxn[rxn::Hm_H_to_H2_e]) + lnKeqb[rxn::Hm_H_to_H2_e];
+      double k40LTE = std::exp(lnk40LTE);
+      k_rxn[rxn::Hm_H_to_H2_e + N_react] =
+          lte_blend_noguard(k40v0, k40LTE, crit_ratio);
     }
-  }  // if constexpr (!Model::is_compact_metal)
+
+    // k_rxn(12+N_react)
+    {
+      double lnk12rev = std::log(k12LTE) + lnKeqb[11];
+      k_rxn[11 + N_react] = std::exp(lnk12rev);
+    }
+
+    // k_rxn[18+N_react] — k13LTE declared at outer scope for k_rxn[49]
+    double k13LTE;
+    {
+      double lnk13LTE = std::log(k_rxn[rxn::three_H]) + lnKeqb[rxn::three_H];
+      k13LTE = std::exp(lnk13LTE);
+      k_rxn[rxn::three_H + N_react] =
+          lte_blend_noguard(k13v0, k13LTE, crit_ratio);
+    }
+
+    // k_rxn(21+N_react)
+    {
+      double lnk21rev = std::log(k21LTE) + lnKeqb[rxn::H2H2_dis];
+      k_rxn[rxn::H2H2_dis + N_react] = std::exp(lnk21rev);
+    }
+
+    // k_rxn(37+N_react)
+    {
+      double lnk37rev = std::log(k37LTE) + lnKeqb[rxn::H2_He_dis];
+      k_rxn[rxn::H2_He_dis + N_react] = std::exp(lnk37rev);
+    }
+
+    // k_rxn(47+N_react)
+    {
+      double k47LTE = c.k47LTE;
+      double lnk47rev = std::log(k47LTE) + lnKeqb[46];
+      k_rxn[46 + N_react] = std::exp(lnk47rev);
+    }
+
+    // k_rxn(48+N_react)
+    {
+      double lnk48rev = std::log(k37LTE) + lnKeqb[47];
+      k_rxn[47 + N_react] = std::exp(lnk48rev);
+    }
+
+    // k_rxn(49+N_react)
+    {
+      double lnk49rev = std::log(k21LTE) + lnKeqb[48];
+      k_rxn[48 + N_react] = std::exp(lnk49rev);
+    }
+
+    // k_rxn(50+N_react)
+    {
+      double lnk50rev = std::log(k13LTE) + lnKeqb[49];
+      k_rxn[49 + N_react] = std::exp(lnk50rev);
+    }
+
+    // k_rxn(68+N_react)
+    {
+      double lnk75LTE = std::log(k_rxn[67]) + lnKeqb[67];
+      double k75LTE = std::exp(lnk75LTE);
+      k_rxn[67 + N_react] = lte_blend_noguard(k75v0, k75LTE, crit_ratio_HD);
+    }
+
+    // Suppress He ionization reversal at low crit_ratio
+    if (crit_ratio < 1.0) {
+      k_rxn[0 + N_react] = 0.0;
+      k_rxn[2 + N_react] = 0.0;
+    }
+
+    // CR reactions k_rxn[130..138]
+    compute_CR_rates_prim<N_react>(k_rxn, params.zeta);
+  }  // if constexpr (!Model::has_grain)
 }
 
 // ---------------------------------------------------------------------------
 // compute_rates<Model>
 //
 // Computes dy/dt = r_f[i] and Jacobian dr_fdy[i][j] for the NR solver.
+// compute_rhs<Model> computes r_f and the reaction-rate cache var alone, and
+// compute_jacobian<Model> dr_fdy alone; each is what compute_rates writes to the
+// same arrays (the same expressions, in the same order).
 // ---------------------------------------------------------------------------
-template <class Model>
-void compute_rates(const std::array<double, 2 * Model::N_react>& k_rxn,
-                   double nH, const std::array<double, Model::N_sp>& y,
-                   const ReactionTable<Model::N_sp, Model::N_react>& tbl,
-                   std::array<double, Model::N_sp>& r_f,
-                   std::array<double, Model::N_sp * Model::N_sp>& dr_fdy,
-                   std::array<double, 2 * Model::N_react>& var) {
+namespace detail {
+template <class Model, bool kRates, bool kJacobian>
+void compute_rates_impl(const std::array<double, 2 * Model::N_react>& k_rxn,
+                        double nH, const std::array<double, Model::N_sp>& y,
+                        const ReactionTable<Model::N_sp, Model::N_react>& tbl,
+                        double* r_f, double* dr_fdy, double* var) {
   constexpr int N_sp = Model::N_sp;
   constexpr int N_react = Model::N_react;
   using Sp = typename Model::Sp;
@@ -587,9 +610,10 @@ void compute_rates(const std::array<double, 2 * Model::N_react>& k_rxn,
       return 11;
   }();
 
-  r_f.fill(0.0);
-  dr_fdy.fill(0.0);
-  var.fill(0.0);
+  if constexpr (kRates) {
+    std::fill_n(r_f, N_sp, 0.0);
+    std::fill_n(var, 2 * N_react, 0.0);
+  }
 
   constexpr int N_ext = N_sp + 3;
   // Extended species vector with vacant/photon/CR sentinels at N_sp..N_sp+2
@@ -597,10 +621,10 @@ void compute_rates(const std::array<double, 2 * Model::N_react>& k_rxn,
   // out.
   std::array<double, N_ext> y_ext = make_y_ext<N_sp>(y);
 
-  std::array<double, N_ext> r_f_dum{};
-  r_f_dum.fill(0.0);
-  std::array<double, N_ext * N_ext> dr_fdy_dum{};
-  dr_fdy_dum.fill(0.0);
+  std::array<double, N_ext> r_f_dum;
+  if constexpr (kRates) r_f_dum.fill(0.0);
+  std::array<double, N_ext * N_ext> dr_fdy_dum;
+  if constexpr (kJacobian) dr_fdy_dum.fill(0.0);
 
   auto dJ = [&](int i, int j) -> double& { return dr_fdy_dum[i * N_ext + j]; };
 
@@ -663,182 +687,186 @@ void compute_rates(const std::array<double, 2 * Model::N_react>& k_rxn,
 
     double rate = rate_fwd - rate_rev;
 
-    r_f_dum[r1] -= rate;
-    r_f_dum[r2] -= rate;
-    r_f_dum[r3] -= rate;
-    r_f_dum[p1] += rate;
-    r_f_dum[p2] += rate;
-    r_f_dum[p3] += rate;
-    if constexpr (Model::has_grain) {
-      if (num == sp_4body_H) r_f_dum[0] += rate;
+    if constexpr (kRates) {
+      r_f_dum[r1] -= rate;
+      r_f_dum[r2] -= rate;
+      r_f_dum[r3] -= rate;
+      r_f_dum[p1] += rate;
+      r_f_dum[p2] += rate;
+      r_f_dum[p3] += rate;
+      if constexpr (Model::has_grain) {
+        if (num == sp_4body_H) r_f_dum[0] += rate;
+      }
+
+      var[num - 1] = rate_fwd;
+      var[num - 1 + N_react] = rate_rev;
     }
 
-    var[num - 1] = rate_fwd;
-    var[num - 1 + N_react] = rate_rev;
+    if constexpr (kJacobian) {
+      // ── Jacobian: forward contributions ──────────────────────────────────
+      if constexpr (Model::has_grain) {
+        if (num == sp_2H_grain) {
+          double d1 = k_rxn[sp_2H_grain - 1] * nH;
+          dJ(r1, 0) -= d1;
+          dJ(r2, 0) -= d1;
+          dJ(r3, 0) -= d1;
+          dJ(p1, 0) += d1;
+          dJ(p2, 0) += d1;
+          dJ(p3, 0) += d1;
+        } else if (num == sp_2D_grain) {
+          double d12 = k_rxn[sp_2D_grain - 1] * nH;
+          dJ(r1, idx_D_grain) -= d12;
+          dJ(r2, idx_D_grain) -= d12;
+          dJ(r3, idx_D_grain) -= d12;
+          dJ(p1, idx_D_grain) += d12;
+          dJ(p2, idx_D_grain) += d12;
+          dJ(p3, idx_D_grain) += d12;
+        } else {
+          double fJ_r1 = k_rxn[num - 1] * y_ext[r2] * y_ext[r3] * nHf;
+          dJ(r1, r1) -= fJ_r1;
+          dJ(r2, r1) -= fJ_r1;
+          dJ(r3, r1) -= fJ_r1;
+          dJ(p1, r1) += fJ_r1;
+          dJ(p2, r1) += fJ_r1;
+          dJ(p3, r1) += fJ_r1;
+          if (num == sp_4body_H) dJ(0, r1) += fJ_r1;
 
-    // ── Jacobian: forward contributions ──────────────────────────────────
-    if constexpr (Model::has_grain) {
-      if (num == sp_2H_grain) {
-        double d1 = k_rxn[sp_2H_grain - 1] * nH;
-        dJ(r1, 0) -= d1;
-        dJ(r2, 0) -= d1;
-        dJ(r3, 0) -= d1;
-        dJ(p1, 0) += d1;
-        dJ(p2, 0) += d1;
-        dJ(p3, 0) += d1;
-      } else if (num == sp_2D_grain) {
-        double d12 = k_rxn[sp_2D_grain - 1] * nH;
-        dJ(r1, idx_D_grain) -= d12;
-        dJ(r2, idx_D_grain) -= d12;
-        dJ(r3, idx_D_grain) -= d12;
-        dJ(p1, idx_D_grain) += d12;
-        dJ(p2, idx_D_grain) += d12;
-        dJ(p3, idx_D_grain) += d12;
+          double fJ_r2 = k_rxn[num - 1] * y_ext[r1] * y_ext[r3] * nHf;
+          dJ(r1, r2) -= fJ_r2;
+          dJ(r2, r2) -= fJ_r2;
+          dJ(r3, r2) -= fJ_r2;
+          dJ(p1, r2) += fJ_r2;
+          dJ(p2, r2) += fJ_r2;
+          dJ(p3, r2) += fJ_r2;
+          if (num == sp_4body_H) dJ(0, r2) += fJ_r2;
+
+          double fJ_r3 = k_rxn[num - 1] * y_ext[r1] * y_ext[r2] * nHf;
+          dJ(r1, r3) -= fJ_r3;
+          dJ(r2, r3) -= fJ_r3;
+          dJ(r3, r3) -= fJ_r3;
+          dJ(p1, r3) += fJ_r3;
+          dJ(p2, r3) += fJ_r3;
+          dJ(p3, r3) += fJ_r3;
+          if (num == sp_4body_H) dJ(0, r3) += fJ_r3;
+        }
       } else {
-        double fJ_r1 = k_rxn[num - 1] * y_ext[r2] * y_ext[r3] * nHf;
-        dJ(r1, r1) -= fJ_r1;
-        dJ(r2, r1) -= fJ_r1;
-        dJ(r3, r1) -= fJ_r1;
-        dJ(p1, r1) += fJ_r1;
-        dJ(p2, r1) += fJ_r1;
-        dJ(p3, r1) += fJ_r1;
-        if (num == sp_4body_H) dJ(0, r1) += fJ_r1;
+        double dr1v = k_rxn[num - 1] * y_ext[r2] * y_ext[r3] * nHf;
+        dJ(r1, r1) -= dr1v;
+        dJ(r2, r1) -= dr1v;
+        dJ(r3, r1) -= dr1v;
+        dJ(p1, r1) += dr1v;
+        dJ(p2, r1) += dr1v;
+        dJ(p3, r1) += dr1v;
 
-        double fJ_r2 = k_rxn[num - 1] * y_ext[r1] * y_ext[r3] * nHf;
-        dJ(r1, r2) -= fJ_r2;
-        dJ(r2, r2) -= fJ_r2;
-        dJ(r3, r2) -= fJ_r2;
-        dJ(p1, r2) += fJ_r2;
-        dJ(p2, r2) += fJ_r2;
-        dJ(p3, r2) += fJ_r2;
-        if (num == sp_4body_H) dJ(0, r2) += fJ_r2;
+        double dr2v = k_rxn[num - 1] * y_ext[r1] * y_ext[r3] * nHf;
+        dJ(r1, r2) -= dr2v;
+        dJ(r2, r2) -= dr2v;
+        dJ(r3, r2) -= dr2v;
+        dJ(p1, r2) += dr2v;
+        dJ(p2, r2) += dr2v;
+        dJ(p3, r2) += dr2v;
 
-        double fJ_r3 = k_rxn[num - 1] * y_ext[r1] * y_ext[r2] * nHf;
-        dJ(r1, r3) -= fJ_r3;
-        dJ(r2, r3) -= fJ_r3;
-        dJ(r3, r3) -= fJ_r3;
-        dJ(p1, r3) += fJ_r3;
-        dJ(p2, r3) += fJ_r3;
-        dJ(p3, r3) += fJ_r3;
-        if (num == sp_4body_H) dJ(0, r3) += fJ_r3;
+        double dr3v = k_rxn[num - 1] * y_ext[r1] * y_ext[r2] * nHf;
+        dJ(r1, r3) -= dr3v;
+        dJ(r2, r3) -= dr3v;
+        dJ(r3, r3) -= dr3v;
+        dJ(p1, r3) += dr3v;
+        dJ(p2, r3) += dr3v;
+        dJ(p3, r3) += dr3v;
       }
-    } else {
-      double dr1v = k_rxn[num - 1] * y_ext[r2] * y_ext[r3] * nHf;
-      dJ(r1, r1) -= dr1v;
-      dJ(r2, r1) -= dr1v;
-      dJ(r3, r1) -= dr1v;
-      dJ(p1, r1) += dr1v;
-      dJ(p2, r1) += dr1v;
-      dJ(p3, r1) += dr1v;
 
-      double dr2v = k_rxn[num - 1] * y_ext[r1] * y_ext[r3] * nHf;
-      dJ(r1, r2) -= dr2v;
-      dJ(r2, r2) -= dr2v;
-      dJ(r3, r2) -= dr2v;
-      dJ(p1, r2) += dr2v;
-      dJ(p2, r2) += dr2v;
-      dJ(p3, r2) += dr2v;
+      // ── Jacobian: reverse contributions ──────────────────────────────────
+      if constexpr (Model::has_grain) {
+        if (num == sp_4body_H) {
+          double rJ_p1 =
+              k_rxn[num - 1 + N_react] * y_ext[p2] * y_ext[p3] * y_ext[0] * nHr;
+          dJ(r1, p1) += rJ_p1;
+          dJ(r2, p1) += rJ_p1;
+          dJ(r3, p1) += rJ_p1;
+          dJ(p1, p1) -= rJ_p1;
+          dJ(p2, p1) -= rJ_p1;
+          dJ(p3, p1) -= rJ_p1;
+          dJ(0, p1) -= rJ_p1;
 
-      double dr3v = k_rxn[num - 1] * y_ext[r1] * y_ext[r2] * nHf;
-      dJ(r1, r3) -= dr3v;
-      dJ(r2, r3) -= dr3v;
-      dJ(r3, r3) -= dr3v;
-      dJ(p1, r3) += dr3v;
-      dJ(p2, r3) += dr3v;
-      dJ(p3, r3) += dr3v;
-    }
+          double rJ_p2 =
+              k_rxn[num - 1 + N_react] * y_ext[p1] * y_ext[p3] * y_ext[0] * nHr;
+          dJ(r1, p2) += rJ_p2;
+          dJ(r2, p2) += rJ_p2;
+          dJ(r3, p2) += rJ_p2;
+          dJ(p1, p2) -= rJ_p2;
+          dJ(p2, p2) -= rJ_p2;
+          dJ(p3, p2) -= rJ_p2;
+          dJ(0, p2) -= rJ_p2;
 
-    // ── Jacobian: reverse contributions ──────────────────────────────────
-    if constexpr (Model::has_grain) {
-      if (num == sp_4body_H) {
-        double rJ_p1 =
-            k_rxn[num - 1 + N_react] * y_ext[p2] * y_ext[p3] * y_ext[0] * nHr;
-        dJ(r1, p1) += rJ_p1;
-        dJ(r2, p1) += rJ_p1;
-        dJ(r3, p1) += rJ_p1;
-        dJ(p1, p1) -= rJ_p1;
-        dJ(p2, p1) -= rJ_p1;
-        dJ(p3, p1) -= rJ_p1;
-        dJ(0, p1) -= rJ_p1;
+          double rJ_p3 =
+              k_rxn[num - 1 + N_react] * y_ext[p1] * y_ext[p2] * y_ext[0] * nHr;
+          dJ(r1, p3) += rJ_p3;
+          dJ(r2, p3) += rJ_p3;
+          dJ(r3, p3) += rJ_p3;
+          dJ(p1, p3) -= rJ_p3;
+          dJ(p2, p3) -= rJ_p3;
+          dJ(p3, p3) -= rJ_p3;
+          dJ(0, p3) -= rJ_p3;
 
-        double rJ_p2 =
-            k_rxn[num - 1 + N_react] * y_ext[p1] * y_ext[p3] * y_ext[0] * nHr;
-        dJ(r1, p2) += rJ_p2;
-        dJ(r2, p2) += rJ_p2;
-        dJ(r3, p2) += rJ_p2;
-        dJ(p1, p2) -= rJ_p2;
-        dJ(p2, p2) -= rJ_p2;
-        dJ(p3, p2) -= rJ_p2;
-        dJ(0, p2) -= rJ_p2;
+          double rJ_1 =
+              k_rxn[num - 1 + N_react] * y_ext[p1] * y_ext[p2] * y_ext[p3] * nHr;
+          dJ(r1, 0) += rJ_1;
+          dJ(r2, 0) += rJ_1;
+          dJ(r3, 0) += rJ_1;
+          dJ(p1, 0) -= rJ_1;
+          dJ(p2, 0) -= rJ_1;
+          dJ(p3, 0) -= rJ_1;
+          dJ(0, 0) -= rJ_1;
+        } else {
+          double rJ_p1 = k_rxn[num - 1 + N_react] * y_ext[p2] * y_ext[p3] * nHr;
+          dJ(r1, p1) += rJ_p1;
+          dJ(r2, p1) += rJ_p1;
+          dJ(r3, p1) += rJ_p1;
+          dJ(p1, p1) -= rJ_p1;
+          dJ(p2, p1) -= rJ_p1;
+          dJ(p3, p1) -= rJ_p1;
 
-        double rJ_p3 =
-            k_rxn[num - 1 + N_react] * y_ext[p1] * y_ext[p2] * y_ext[0] * nHr;
-        dJ(r1, p3) += rJ_p3;
-        dJ(r2, p3) += rJ_p3;
-        dJ(r3, p3) += rJ_p3;
-        dJ(p1, p3) -= rJ_p3;
-        dJ(p2, p3) -= rJ_p3;
-        dJ(p3, p3) -= rJ_p3;
-        dJ(0, p3) -= rJ_p3;
+          double rJ_p2 = k_rxn[num - 1 + N_react] * y_ext[p1] * y_ext[p3] * nHr;
+          dJ(r1, p2) += rJ_p2;
+          dJ(r2, p2) += rJ_p2;
+          dJ(r3, p2) += rJ_p2;
+          dJ(p1, p2) -= rJ_p2;
+          dJ(p2, p2) -= rJ_p2;
+          dJ(p3, p2) -= rJ_p2;
 
-        double rJ_1 =
-            k_rxn[num - 1 + N_react] * y_ext[p1] * y_ext[p2] * y_ext[p3] * nHr;
-        dJ(r1, 0) += rJ_1;
-        dJ(r2, 0) += rJ_1;
-        dJ(r3, 0) += rJ_1;
-        dJ(p1, 0) -= rJ_1;
-        dJ(p2, 0) -= rJ_1;
-        dJ(p3, 0) -= rJ_1;
-        dJ(0, 0) -= rJ_1;
+          double rJ_p3 = k_rxn[num - 1 + N_react] * y_ext[p1] * y_ext[p2] * nHr;
+          dJ(r1, p3) += rJ_p3;
+          dJ(r2, p3) += rJ_p3;
+          dJ(r3, p3) += rJ_p3;
+          dJ(p1, p3) -= rJ_p3;
+          dJ(p2, p3) -= rJ_p3;
+          dJ(p3, p3) -= rJ_p3;
+        }
       } else {
-        double rJ_p1 = k_rxn[num - 1 + N_react] * y_ext[p2] * y_ext[p3] * nHr;
-        dJ(r1, p1) += rJ_p1;
-        dJ(r2, p1) += rJ_p1;
-        dJ(r3, p1) += rJ_p1;
-        dJ(p1, p1) -= rJ_p1;
-        dJ(p2, p1) -= rJ_p1;
-        dJ(p3, p1) -= rJ_p1;
+        double dp1v = k_rxn[num - 1 + N_react] * y_ext[p2] * y_ext[p3] * nHr;
+        dJ(r1, p1) += dp1v;
+        dJ(r2, p1) += dp1v;
+        dJ(r3, p1) += dp1v;
+        dJ(p1, p1) -= dp1v;
+        dJ(p2, p1) -= dp1v;
+        dJ(p3, p1) -= dp1v;
 
-        double rJ_p2 = k_rxn[num - 1 + N_react] * y_ext[p1] * y_ext[p3] * nHr;
-        dJ(r1, p2) += rJ_p2;
-        dJ(r2, p2) += rJ_p2;
-        dJ(r3, p2) += rJ_p2;
-        dJ(p1, p2) -= rJ_p2;
-        dJ(p2, p2) -= rJ_p2;
-        dJ(p3, p2) -= rJ_p2;
+        double dp2v = k_rxn[num - 1 + N_react] * y_ext[p1] * y_ext[p3] * nHr;
+        dJ(r1, p2) += dp2v;
+        dJ(r2, p2) += dp2v;
+        dJ(r3, p2) += dp2v;
+        dJ(p1, p2) -= dp2v;
+        dJ(p2, p2) -= dp2v;
+        dJ(p3, p2) -= dp2v;
 
-        double rJ_p3 = k_rxn[num - 1 + N_react] * y_ext[p1] * y_ext[p2] * nHr;
-        dJ(r1, p3) += rJ_p3;
-        dJ(r2, p3) += rJ_p3;
-        dJ(r3, p3) += rJ_p3;
-        dJ(p1, p3) -= rJ_p3;
-        dJ(p2, p3) -= rJ_p3;
-        dJ(p3, p3) -= rJ_p3;
+        double dp3v = k_rxn[num - 1 + N_react] * y_ext[p1] * y_ext[p2] * nHr;
+        dJ(r1, p3) += dp3v;
+        dJ(r2, p3) += dp3v;
+        dJ(r3, p3) += dp3v;
+        dJ(p1, p3) -= dp3v;
+        dJ(p2, p3) -= dp3v;
+        dJ(p3, p3) -= dp3v;
       }
-    } else {
-      double dp1v = k_rxn[num - 1 + N_react] * y_ext[p2] * y_ext[p3] * nHr;
-      dJ(r1, p1) += dp1v;
-      dJ(r2, p1) += dp1v;
-      dJ(r3, p1) += dp1v;
-      dJ(p1, p1) -= dp1v;
-      dJ(p2, p1) -= dp1v;
-      dJ(p3, p1) -= dp1v;
-
-      double dp2v = k_rxn[num - 1 + N_react] * y_ext[p1] * y_ext[p3] * nHr;
-      dJ(r1, p2) += dp2v;
-      dJ(r2, p2) += dp2v;
-      dJ(r3, p2) += dp2v;
-      dJ(p1, p2) -= dp2v;
-      dJ(p2, p2) -= dp2v;
-      dJ(p3, p2) -= dp2v;
-
-      double dp3v = k_rxn[num - 1 + N_react] * y_ext[p1] * y_ext[p2] * nHr;
-      dJ(r1, p3) += dp3v;
-      dJ(r2, p3) += dp3v;
-      dJ(r3, p3) += dp3v;
-      dJ(p1, p3) -= dp3v;
-      dJ(p2, p3) -= dp3v;
-      dJ(p3, p3) -= dp3v;
     }
   }
 
@@ -870,18 +898,22 @@ void compute_rates(const std::array<double, 2 * Model::N_react>& k_rxn,
 
     double rate = k_rxn[num - 1] * y_ext[r2];
 
-    r_f_dum[r2] -= rate;
-    r_f_dum[p1] += rate;
-    r_f_dum[p2] += rate;
-    r_f_dum[p3] += rate;
+    if constexpr (kRates) {
+      r_f_dum[r2] -= rate;
+      r_f_dum[p1] += rate;
+      r_f_dum[p2] += rate;
+      r_f_dum[p3] += rate;
 
-    var[num - 1] = rate;
+      var[num - 1] = rate;
+    }
 
-    double d2 = k_rxn[num - 1];
-    dJ(r2, r2) -= d2;
-    dJ(p1, r2) += d2;
-    dJ(p2, r2) += d2;
-    dJ(p3, r2) += d2;
+    if constexpr (kJacobian) {
+      double d2 = k_rxn[num - 1];
+      dJ(r2, r2) -= d2;
+      dJ(p1, r2) += d2;
+      dJ(p2, r2) += d2;
+      dJ(p3, r2) += d2;
+    }
   }
 
   // ─── Loop 3 & 4: metal-only (charge + grain surface) ─────────────────────
@@ -919,38 +951,42 @@ void compute_rates(const std::array<double, 2 * Model::N_react>& k_rxn,
       double nHf = pow_int(nH, nr - 1);
       double rate = k_rxn[num - 1] * y_ext[r1] * y_ext[r2] * y_ext[r3] * nHf;
 
-      r_f_dum[r1] -= rate;
-      r_f_dum[r2] -= rate;
-      r_f_dum[r3] -= rate;
-      r_f_dum[p1] += rate;
-      r_f_dum[p2] += rate;
-      r_f_dum[p3] += rate;
+      if constexpr (kRates) {
+        r_f_dum[r1] -= rate;
+        r_f_dum[r2] -= rate;
+        r_f_dum[r3] -= rate;
+        r_f_dum[p1] += rate;
+        r_f_dum[p2] += rate;
+        r_f_dum[p3] += rate;
 
-      var[num - 1] = rate;
+        var[num - 1] = rate;
+      }
 
-      double fJ_r1 = k_rxn[num - 1] * y_ext[r2] * y_ext[r3] * nHf;
-      dJ(r1, r1) -= fJ_r1;
-      dJ(r2, r1) -= fJ_r1;
-      dJ(r3, r1) -= fJ_r1;
-      dJ(p1, r1) += fJ_r1;
-      dJ(p2, r1) += fJ_r1;
-      dJ(p3, r1) += fJ_r1;
+      if constexpr (kJacobian) {
+        double fJ_r1 = k_rxn[num - 1] * y_ext[r2] * y_ext[r3] * nHf;
+        dJ(r1, r1) -= fJ_r1;
+        dJ(r2, r1) -= fJ_r1;
+        dJ(r3, r1) -= fJ_r1;
+        dJ(p1, r1) += fJ_r1;
+        dJ(p2, r1) += fJ_r1;
+        dJ(p3, r1) += fJ_r1;
 
-      double fJ_r2 = k_rxn[num - 1] * y_ext[r1] * y_ext[r3] * nHf;
-      dJ(r1, r2) -= fJ_r2;
-      dJ(r2, r2) -= fJ_r2;
-      dJ(r3, r2) -= fJ_r2;
-      dJ(p1, r2) += fJ_r2;
-      dJ(p2, r2) += fJ_r2;
-      dJ(p3, r2) += fJ_r2;
+        double fJ_r2 = k_rxn[num - 1] * y_ext[r1] * y_ext[r3] * nHf;
+        dJ(r1, r2) -= fJ_r2;
+        dJ(r2, r2) -= fJ_r2;
+        dJ(r3, r2) -= fJ_r2;
+        dJ(p1, r2) += fJ_r2;
+        dJ(p2, r2) += fJ_r2;
+        dJ(p3, r2) += fJ_r2;
 
-      double fJ_r3 = k_rxn[num - 1] * y_ext[r1] * y_ext[r2] * nHf;
-      dJ(r1, r3) -= fJ_r3;
-      dJ(r2, r3) -= fJ_r3;
-      dJ(r3, r3) -= fJ_r3;
-      dJ(p1, r3) += fJ_r3;
-      dJ(p2, r3) += fJ_r3;
-      dJ(p3, r3) += fJ_r3;
+        double fJ_r3 = k_rxn[num - 1] * y_ext[r1] * y_ext[r2] * nHf;
+        dJ(r1, r3) -= fJ_r3;
+        dJ(r2, r3) -= fJ_r3;
+        dJ(r3, r3) -= fJ_r3;
+        dJ(p1, r3) += fJ_r3;
+        dJ(p2, r3) += fJ_r3;
+        dJ(p3, r3) += fJ_r3;
+      }
     }
 
     // Loop 4: grain surface reactions.  Their forward rates live in the grain
@@ -975,34 +1011,71 @@ void compute_rates(const std::array<double, 2 * Model::N_react>& k_rxn,
         double nHr = pow_int(nH, nr);
         double rate = k_rxn[num - 1] * y_ext[r1] * y_ext[r2] * nHr;
 
-        r_f_dum[r1] -= rate;
-        r_f_dum[r2] -= rate;
-        r_f_dum[p1] += rate;
-        r_f_dum[p2] += rate;
+        if constexpr (kRates) {
+          r_f_dum[r1] -= rate;
+          r_f_dum[r2] -= rate;
+          r_f_dum[p1] += rate;
+          r_f_dum[p2] += rate;
 
-        var[num - 1] = rate;
+          var[num - 1] = rate;
+        }
 
-        double fJ_r1 = k_rxn[num - 1] * y_ext[r2] * nHr;
-        dJ(r1, r1) -= fJ_r1;
-        dJ(r2, r1) -= fJ_r1;
-        dJ(p1, r1) += fJ_r1;
-        dJ(p2, r1) += fJ_r1;
+        if constexpr (kJacobian) {
+          double fJ_r1 = k_rxn[num - 1] * y_ext[r2] * nHr;
+          dJ(r1, r1) -= fJ_r1;
+          dJ(r2, r1) -= fJ_r1;
+          dJ(p1, r1) += fJ_r1;
+          dJ(p2, r1) += fJ_r1;
 
-        double fJ_r2 = k_rxn[num - 1] * y_ext[r1] * nHr;
-        dJ(r1, r2) -= fJ_r2;
-        dJ(r2, r2) -= fJ_r2;
-        dJ(p1, r2) += fJ_r2;
-        dJ(p2, r2) += fJ_r2;
+          double fJ_r2 = k_rxn[num - 1] * y_ext[r1] * nHr;
+          dJ(r1, r2) -= fJ_r2;
+          dJ(r2, r2) -= fJ_r2;
+          dJ(p1, r2) += fJ_r2;
+          dJ(p2, r2) += fJ_r2;
+        }
       }
     }
   }
 
   // ── Copy [0..N_sp-1] from extended buffers ───────────────────────────────
-  for (int i = 0; i < N_sp; ++i) r_f[i] = r_f_dum[i];
+  if constexpr (kRates)
+    for (int i = 0; i < N_sp; ++i) r_f[i] = r_f_dum[i];
 
-  for (int i = 0; i < N_sp; ++i)
-    for (int j = 0; j < N_sp; ++j)
-      dr_fdy[i * N_sp + j] = dr_fdy_dum[i * N_ext + j];
+  if constexpr (kJacobian)
+    for (int i = 0; i < N_sp; ++i)
+      for (int j = 0; j < N_sp; ++j)
+        dr_fdy[i * N_sp + j] = dr_fdy_dum[i * N_ext + j];
+}
+}  // namespace detail
+
+template <class Model>
+void compute_rates(const std::array<double, 2 * Model::N_react>& k_rxn,
+                   double nH, const std::array<double, Model::N_sp>& y,
+                   const ReactionTable<Model::N_sp, Model::N_react>& tbl,
+                   std::array<double, Model::N_sp>& r_f,
+                   std::array<double, Model::N_sp * Model::N_sp>& dr_fdy,
+                   std::array<double, 2 * Model::N_react>& var) {
+  detail::compute_rates_impl<Model, true, true>(k_rxn, nH, y, tbl, r_f.data(),
+                                                dr_fdy.data(), var.data());
+}
+
+template <class Model>
+void compute_rhs(const std::array<double, 2 * Model::N_react>& k_rxn, double nH,
+                 const std::array<double, Model::N_sp>& y,
+                 const ReactionTable<Model::N_sp, Model::N_react>& tbl,
+                 std::array<double, Model::N_sp>& r_f,
+                 std::array<double, 2 * Model::N_react>& var) {
+  detail::compute_rates_impl<Model, true, false>(k_rxn, nH, y, tbl, r_f.data(),
+                                                 nullptr, var.data());
+}
+
+template <class Model>
+void compute_jacobian(const std::array<double, 2 * Model::N_react>& k_rxn,
+                      double nH, const std::array<double, Model::N_sp>& y,
+                      const ReactionTable<Model::N_sp, Model::N_react>& tbl,
+                      std::array<double, Model::N_sp * Model::N_sp>& dr_fdy) {
+  detail::compute_rates_impl<Model, false, true>(k_rxn, nH, y, tbl, nullptr,
+                                                 dr_fdy.data(), nullptr);
 }
 
 }  // namespace arche

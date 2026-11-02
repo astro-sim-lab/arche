@@ -7,16 +7,19 @@
 // branch
 //
 // equichem<N_sp, N_react> and equichem_minimal<N_sp, N_react> compute Saha
-// equilibrium abundances in the high-density branch (nH > 1e18).  chemreact()
-// dispatches to these through forward declarations in solve/chemreact.h; the
-// including translation unit (chemistry.h) pulls in these definitions so the
-// template instantiations resolve.
+// equilibrium abundances in the high-density regime (nH > saha_threshold_nH).
+// The integrator's Saha step (solve/integrator.h) dispatches to these through
+// Model::SahaPolicy, forward-declared in the model traits; the including
+// translation unit (chemistry.h) pulls in these definitions so the template
+// instantiations resolve.
 // ---------------------------------------------------------------------------
 #include <array>
+#include <algorithm>
 #include <cmath>
+#include <limits>
 
 #include "kinetics/reaction_index.h"
-#include "core/newton.h"  // newton_solve, CramerSolve2, NewtonOpts
+#include "core/saha_newton.h"  // saha_newton_log
 #include "kinetics/rates.h"
 #include "models/primordial/minimal.h"
 #include "models/primordial/partition_function_prim.h"
@@ -29,8 +32,7 @@ namespace arche {
 // build_saha_keqb and fill_H_saha are the parts that every primordial Saha
 // solver (full and compact) carries verbatim.  Factoring them keeps the
 // model-specific element blocks and conservation residuals as the only
-// difference between solvers, without changing the floating-point operations
-// (so the high-density branch stays bit-for-bit identical).
+// difference between solvers.
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Per-reaction Saha equilibrium constants Keqb[num-1] = exp(lnKeqb), built from
@@ -87,6 +89,42 @@ double fill_H_saha(double ye, double yh, double K_Hp, double K_Hm, double K_H2p,
   return y_Hp;
 }
 
+// saha_solve_ye_yh — the primordial Saha root (core/saha_newton.h) from the cell's own
+// (y_e, y_H), then, if that
+// fails, from a start that depends on T, n_H and the cell's H budget y_H,tot only: y_H
+// from the H/H2 balance with the ions neglected, y_H + 2 K_H2 y_H^2 = y_H,tot, and y_e
+// from ye * y_X+ = K_X+ * y_X summed
+// over the dominant positive ions (below ~1300 K that is Li+, not H+, so an H+-only
+// start overflows the Li+ term). If both fail, ye and yh become NaN, so the caller's
+// output check rejects the step instead of accepting an unconverged state.
+template <class Residual>
+void saha_solve_ye_yh(double& ye, double& yh, double K_H2,
+                      double ion_sum_per_ye, double K_Hp, double yH_tot,
+                      Residual&& residual) {
+  // core/saha_newton.h works on arrays; the primordial balances take (y_e, y_H).
+  auto res = [&](const std::array<double, 2>& v, std::array<double, 2>& f) {
+    double ff[2];
+    residual(v[0], v[1], ff);
+    f[0] = ff[0];
+    f[1] = ff[1];
+  };
+  const std::array<bool, 2> active = {true, true};
+  std::array<double, 2> x = {ye, yh};
+  if (saha_newton_log<2>(x, active, res)) {
+    ye = x[0];
+    yh = x[1];
+    return;
+  }
+  const double h = 2.0 * yH_tot / (1.0 + std::sqrt(1.0 + 8.0 * K_H2 * yH_tot));
+  x = {std::sqrt(K_Hp * h + ion_sum_per_ye), h};
+  if (saha_newton_log<2>(x, active, res)) {
+    ye = x[0];
+    yh = x[1];
+    return;
+  }
+  ye = yh = std::numeric_limits<double>::quiet_NaN();
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // equichem — Saha equilibrium abundances (high-density branch nH > 1e18)
 //
@@ -94,15 +132,24 @@ double fill_H_saha(double ye, double yh, double K_Hp, double K_Hm, double K_H2p,
 //   primordial partition-function provider (eval_pf_set), then iterates 2D
 //   Newton-Raphson on charge neutrality (F_cha) and hydrogen conservation
 //   (F_hyd).
+//
+//   The element budgets (H, He, D, Li) are the input cell's own, summed over the
+//   species this solver writes, so the Saha state conserves every element the
+//   kinetic step would. The reference composition (abundance_ref) holds only where
+//   nothing has moved the budgets (a one-zone run); a 3D cell's passive-scalar
+//   advection moves them, and resetting them to the reference changes an element by
+//   more than conservation::project accepts.
 // ─────────────────────────────────────────────────────────────────────────────
 template <int N_sp, int N_react>
 void equichem(double nH, double T_K, std::array<double, N_sp>& y,
               const ReactionTable<N_sp, N_react>& tbl) {
   using Sp = zero_metal::Sp;  // primordial Saha (y[Sp::H] etc.)
-  constexpr double yHe = abundance_ref::yHe;
-  constexpr double yD = abundance_ref::yD;
-  constexpr double yLi = abundance_ref::yLi;
-  constexpr double eps_it = numerics::eps_it_prim;
+  const double yHe = y[Sp::He] + y[Sp::Hep] + y[Sp::Hepp] + y[Sp::HeHp];
+  const double yD = y[Sp::D] + y[Sp::HD] + y[Sp::Dp] + y[Sp::HDp] + y[Sp::Dm];
+  double yLi = 0.0;
+  if constexpr (N_sp >= 23)
+    yLi = y[Sp::Li] + y[Sp::LiH] + y[Sp::Lip] + y[Sp::Lim] + y[Sp::LiHp] +
+          y[Sp::Lipp] + y[Sp::Lippp];
 
   // Compute partition functions (0-based species + 3 sentinel slots) through
   // the shared primordial provider, addressed by canonical identity.
@@ -189,41 +236,36 @@ void equichem(double nH, double T_K, std::array<double, N_sp>& y,
     return val;
   };
 
-  // Hydrogen conservation:  Σ(H-content_i * y_i) = 1
-  auto F_hyd = [&](const std::array<double, N_sp>& yy) -> double {
+  // Hydrogen conservation:  Σ(H-content_i * y_i) = the input cell's H budget
+  auto H_content = [&](const std::array<double, N_sp>& yy) -> double {
     double val = yy[Sp::H] + yy[Sp::Hp] + yy[Sp::Hm] + yy[Sp::HeHp] +
                  yy[Sp::HD] + yy[Sp::HDp] + 2.0 * (yy[Sp::H2] + yy[Sp::H2p]) +
-                 3.0 * yy[Sp::H3p] - 1.0;
+                 3.0 * yy[Sp::H3p];
     if constexpr (N_sp >= 23) val += yy[Sp::LiH] + yy[Sp::LiHp];  // LiH, LiH+
     return val;
   };
+  const double yH_tot = H_content(y);
+  auto F_hyd = [&](const std::array<double, N_sp>& yy) -> double {
+    return H_content(yy) - yH_tot;
+  };
 
   std::array<double, N_sp> ytmp{};
-  std::array<double, 2> x = {y_e, y_H};
-  const std::array<bool, 2> active = {true, true};
-
-  // 2D Newton–Raphson on (y_e, y_H): charge neutrality and H conservation.
-  newton_solve<2, CramerSolve2>(
-      x, active,
-      [&](const std::array<double, 2>& xx, std::array<double, 2>& fv) {
-        fill_y(xx[0], xx[1], ytmp);
-        fv[0] = F_cha(ytmp);
-        fv[1] = F_hyd(ytmp);
-      },
-      [](std::array<double, 2>& xx, const std::array<double, 2>& d) {
-        xx[0] += d[0];
-        xx[1] += d[1];
-      },
-      NewtonOpts{eps_it, 100, 1.0e-10});
+  // 2D Newton on (ln y_e, ln y_H): charge neutrality and H conservation.
+  saha_solve_ye_yh(y_e, y_H, K_H2, K_Hep * yHe + K_Dp * yD + K_Lip * yLi, K_Hp,
+                   yH_tot, [&](double ye, double yh, double f[2]) {
+                     fill_y(ye, yh, ytmp);
+                     f[0] = F_cha(ytmp);
+                     f[1] = F_hyd(ytmp);
+                   });
 
   // Final fill
-  fill_y(x[0], x[1], y);
+  fill_y(y_e, y_H, y);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Saha-equilibrium policies for the primordial models.  chemreact() selects one
-// per model via Model::SahaPolicy (forward-declared in models/primordial/
-// traits.h) and calls solve() in the high-density branch.
+// Saha-equilibrium policies for the primordial models.  The integrator selects
+// one per model via Model::SahaPolicy (forward-declared in models/primordial/
+// traits.h) and calls solve() in the high-density regime.
 // ─────────────────────────────────────────────────────────────────────────────
 struct FullPrimSaha {
   template <int N_sp, int N_react>
@@ -239,16 +281,16 @@ struct FullPrimSaha {
 // Nakauchi2019_Minimal.  Same retained-ion physics as equichem, but
 // addressed in the compact local index space (zero_metal_minimal::Sp) with the
 // 9-row compact Saha sub-table (ids 1..9 in keep-set order), and partition
-// functions evaluated by canonical identity (pf_for_prim).
+// functions evaluated by canonical identity (pf_for_prim).  The element budgets
+// are the input cell's own, as in equichem.
 // ─────────────────────────────────────────────────────────────────────────────
 template <int N_sp, int N_react>
 void equichem_minimal(double nH, double T_K, std::array<double, N_sp>& y,
                       const ReactionTable<N_sp, N_react>& tbl) {
   using Sp = zero_metal_minimal::Sp;
-  constexpr double yHe = abundance_ref::yHe;
-  constexpr double yD = abundance_ref::yD;
-  constexpr double yLi = abundance_ref::yLi;
-  constexpr double eps_it = numerics::eps_it_prim;
+  const double yHe = y[Sp::He] + y[Sp::Hep];
+  const double yD = y[Sp::D] + y[Sp::HD] + y[Sp::Dp];
+  const double yLi = y[Sp::Li] + y[Sp::LiH] + y[Sp::Lip];
 
   // Partition functions by canonical identity (compact local order).
   std::array<double, N_sp + 3> pf{};
@@ -297,28 +339,23 @@ void equichem_minimal(double nH, double T_K, std::array<double, N_sp>& y,
     return yy[Sp::Hp] + yy[Sp::H2p] + yy[Sp::H3p] + yy[Sp::Dp] + yy[Sp::Lip] -
            (yy[Sp::e] + yy[Sp::Hm]);
   };
-  auto F_hyd = [&](const std::array<double, N_sp>& yy) -> double {
+  auto H_content = [&](const std::array<double, N_sp>& yy) -> double {
     return yy[Sp::H] + yy[Sp::Hp] + yy[Sp::Hm] + yy[Sp::HD] +
-           2.0 * (yy[Sp::H2] + yy[Sp::H2p]) + 3.0 * yy[Sp::H3p] + yy[Sp::LiH] -
-           1.0;
+           2.0 * (yy[Sp::H2] + yy[Sp::H2p]) + 3.0 * yy[Sp::H3p] + yy[Sp::LiH];
+  };
+  const double yH_tot = H_content(y);
+  auto F_hyd = [&](const std::array<double, N_sp>& yy) -> double {
+    return H_content(yy) - yH_tot;
   };
 
   std::array<double, N_sp> ytmp{};
-  std::array<double, 2> x = {y_e, y_H};
-  const std::array<bool, 2> active = {true, true};
-  newton_solve<2, CramerSolve2>(
-      x, active,
-      [&](const std::array<double, 2>& xx, std::array<double, 2>& fv) {
-        fill_y(xx[0], xx[1], ytmp);
-        fv[0] = F_cha(ytmp);
-        fv[1] = F_hyd(ytmp);
-      },
-      [](std::array<double, 2>& xx, const std::array<double, 2>& d) {
-        xx[0] += d[0];
-        xx[1] += d[1];
-      },
-      NewtonOpts{eps_it, 100, 1.0e-10});
-  fill_y(x[0], x[1], y);
+  saha_solve_ye_yh(y_e, y_H, K_H2, K_Dp * yD + K_Lip * yLi, K_Hp, yH_tot,
+                   [&](double ye, double yh, double f[2]) {
+                     fill_y(ye, yh, ytmp);
+                     f[0] = F_cha(ytmp);
+                     f[1] = F_hyd(ytmp);
+                   });
+  fill_y(y_e, y_H, y);
 }
 
 struct MinimalSaha {

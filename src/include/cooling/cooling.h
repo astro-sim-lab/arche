@@ -91,10 +91,9 @@ inline double h2_cooling(double nH, double T_K, double rho, double y_a,
   constexpr double lgT1 = -2.0;  // log10(10/1000)
   constexpr double lgT2 = -1.0;  // log10(100/1000)
   constexpr double lgT4 = 1.0;   // log10(10000/1000)
-  // log10(6000/1000) = log10(6.0); std::log10 is not a valid constexpr
-  // initializer under C++17/clang-22 (verified), so the full-precision
-  // literal is used. Replaces the previously truncated 0.7781512504
-  // (1.64e-11 off), which caused spurious ~1e-11 dex steps at T=6000 K.
+  // log10(6000/1000) = log10(6.0); std::log10 is not a constexpr function in
+  // C++17, so the full-precision literal is used.  A literal truncated to 10
+  // digits would leave a ~1e-11 dex step in the fit at T = 6000 K.
   constexpr double lgT6 = 0.7781512503836436;
 
   // Horner-form polynomial evaluation
@@ -213,9 +212,7 @@ inline double h2_cooling(double nH, double T_K, double rho, double y_a,
 // ─────────────────────────────────────────────────────────────────────────────
 // fesc_HD — HD line escape fraction (fitting formula)
 //   alpha(T): Nakauchi, Omukai & Susa (2019), MNRAS 488, 1846
-//   (arXiv:1904.08336), per the arche author's attribution; NOT independently
-//   verified against the typeset paper (arXiv v1 has no appendix) -- confirm
-//   against the typeset paper. Block split (951.64 K) is the alpha fit
+//   (arXiv:1904.08336). Block split (951.64 K) is the alpha fit
 //   crossing, C0-continuous; coefficients unchanged.
 // ─────────────────────────────────────────────────────────────────────────────
 inline double fesc_HD(double Nc_HD, double T_K) {
@@ -302,8 +299,7 @@ inline double hd_cooling(double nH, double T_K, double rho, double y_HD,
 //   index space): y[Sp::H], y[Sp::H2], y[Sp::e], y[Sp::Hp], y[Sp::He], y[Sp::HD].
 //   This matters because the compact Nakauchi2019_Minimal lays HD at a different
 //   local index (10) than the full/metal networks (12); using the model's Sp
-//   keeps every model's HD/H2 cooling correct (full/metal stay bit-for-bit since
-//   their indices are unchanged).
+//   keeps every model's HD/H2 cooling correct.
 // ─────────────────────────────────────────────────────────────────────────────
 template <class Sp, int N_sp>
 void line_cool(const std::array<double, N_sp>& y, double Nc_H2, double Nc_HD,
@@ -345,7 +341,7 @@ void line_cool(const std::array<double, N_sp>& y, double Nc_H2, double Nc_HD,
 
 // ─────────────────────────────────────────────────────────────────────────────
 // cnt_cool — continuum (dust+gas) radiative cooling
-//   Uses Rosseland mean opacity table k_prm (detail::eval_opacity)
+//   Uses the gas Planck-mean opacity table k_prm (detail::eval_opacity)
 // ─────────────────────────────────────────────────────────────────────────────
 inline void cnt_cool(double nH, double T_K, double T_rad, double esc_cnt,
                      double& k_gas, double& Lambda_gas, double& Lambda_cnt) {
