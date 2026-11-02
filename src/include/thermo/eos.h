@@ -81,6 +81,13 @@ inline double specific_internal_energy(const EosComposition& c,
 double temperature_from_specific_internal_energy(const EosComposition& c,
                                                  double e_cgs) noexcept;
 
+// The plain bisection in ln T over [1, 1e12] K, clamped at both ends: the root that
+// temperature_from_specific_internal_energy finds by secant iteration (to the rounding
+// level of e), resolved to adjacent doubles.  Compiled in the same unit, as the
+// reference for that agreement.
+double temperature_from_specific_internal_energy_bisection(
+    const EosComposition& c, double e_cgs) noexcept;
+
 // Defined and explicitly instantiated in thermo/eos.cc.  Keeping the
 // composition extraction out of the facade translation unit preserves its
 // code-generation isolation from the large chemistry kernel.

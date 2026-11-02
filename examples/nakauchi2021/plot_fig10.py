@@ -161,9 +161,9 @@ def main():
     ]
     nethandles = [
         Line2D([0], [0], color="k", lw=1.3, ls="-", alpha=1.0,
-               label="reduced (Minimal, 40 sp)"),
+               label="reduced (Minimal, 44 sp)"),
         Line2D([0], [0], color="k", lw=2.6, ls="--", alpha=0.9,
-               label="full (Nakauchi2021, 89 sp)"),
+               label="full (Nakauchi2021, 95 sp)"),
     ]
     axes[0, 0].legend(handles=zhandles, fontsize=7.5, ncol=2,
                       loc="lower right", framealpha=0.9)

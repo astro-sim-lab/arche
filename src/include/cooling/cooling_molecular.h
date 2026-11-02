@@ -14,9 +14,10 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <functional>
+#include <cstddef>
 #include <utility>
 
+#include "core/exact_memo.h"
 #include "core/state.h"
 
 namespace arche {
@@ -34,6 +35,15 @@ struct LineCoolRates {
   double CI = 0.0;
   double OI = 0.0;
   double Lya = 0.0;
+  // Each emitter's line cooling per unit of its own abundance: the cooling is linear
+  // in that abundance (the populations depend on the collision partners only), so
+  // these are its exact derivatives with respect to y(CO), ..., y(O).
+  double per_CO = 0.0;
+  double per_OH = 0.0;
+  double per_H2O = 0.0;
+  double per_CII = 0.0;
+  double per_CI = 0.0;
+  double per_OI = 0.0;
   double total() const { return H2 + HD + CO + OH + H2O + CII + CI + OI + Lya; }
 };
 
@@ -131,13 +141,13 @@ inline double beta_esc(double tau_L, double tau_C) {
 }
 
 // ── NR escape-probability solver ─────────────────────────────────────────
-// pop_fn(esc, func, Ld): compute residuals func[] and cooling rate Ld.
+// pop_fn(esc, beta, Ld): the escape probabilities beta[] the level populations at esc[]
+// give, and the cooling rate Ld.  The residual is func = esc - beta.
 // esc[N_line] is the escape probability array (warm-start, updated in-place).
 // Returns converged cooling rate.
-template <int N_line>
-double solve_esc_prob(
-    std::function<void(const double*, double*, double&)> pop_fn,
-    double esc[N_line]) {
+template <int N_line, class PopFn>
+double solve_esc_prob(const PopFn& pop_fn, double esc[N_line]) {
+  double beta[N_line], beta_f[N_line];
   double func[N_line], func_f[N_line], esc_f[N_line];
   double A[N_line][N_line], desc[N_line];
   double esc_min[N_line];
@@ -147,7 +157,8 @@ double solve_esc_prob(
   for (int i = 0; i < N_line; ++i) esc_min[i] = esc[i];
 
   for (int itr = 0; itr < 1000; ++itr) {
-    pop_fn(esc, func, Ld_val);
+    pop_fn(esc, beta, Ld_val);
+    for (int i = 0; i < N_line; ++i) func[i] = esc[i] - beta[i];
 
     // Finite-difference Jacobian
     for (int j = 0; j < N_line; ++j) {
@@ -157,7 +168,8 @@ double solve_esc_prob(
       for (int jj = 0; jj < N_line; ++jj) esc_f[jj] = esc[jj];
       esc_f[j] += de;
       double tmp;
-      pop_fn(esc_f, func_f, tmp);
+      pop_fn(esc_f, beta_f, tmp);
+      for (int i = 0; i < N_line; ++i) func_f[i] = esc_f[i] - beta_f[i];
       for (int i = 0; i < N_line; ++i) A[i][j] = (func_f[i] - func[i]) / de;
     }
     for (int i = 0; i < N_line; ++i) desc[i] = -func[i];
@@ -182,15 +194,40 @@ double solve_esc_prob(
     for (int i = 0; i < N_line; ++i)
       if (std::abs(A[i][i]) > 1.0e-50) desc[i] /= A[i][i];
 
-    // Step-size limiting
+    // Step-size limiting.  A component whose full Newton step would reach zero or
+    // below takes beta, the escape probability the current populations give (>= 0),
+    // as pop_fn returns it: esc - func rounds to zero where beta is below the rounding
+    // level of esc.  In the optically thick limit beta ~ 0 and it lands on the root,
+    // instead of moving 40% per iteration toward it; the others share one damping
+    // factor, which keeps a component moving down above 60% of its value.  A
+    // component moving up is not limited (limiting it can trap a vanishing esc below
+    // its root).
+    bool to_beta[N_line];
     double fact = 1.0;
     if (itr > 20 && err_max > 1.0) fact = 1.0e-2;
-    for (int i = 0; i < N_line; ++i)
-      if (esc[i] != 0.0 && desc[i] != 0.0)
+    for (int i = 0; i < N_line; ++i) {
+      to_beta[i] = !(esc[i] + desc[i] > 0.0);
+      if (!to_beta[i] && esc[i] != 0.0 && desc[i] < 0.0)
         fact = std::min(fact, 0.4 * std::abs(esc[i] / desc[i]));
-    for (int i = 0; i < N_line; ++i) esc[i] += fact * desc[i];
+    }
+    for (int i = 0; i < N_line; ++i)
+      esc[i] = to_beta[i] ? std::max(beta[i], 0.0) : esc[i] + fact * desc[i];
     for (int i = 0; i < N_line; ++i)
       if (!std::isfinite(esc[i])) esc[i] = esc_min[i];
+
+    // Absolute stop: where the root is esc ~ 0 (an optically thick line) the relative
+    // correction of a vanishing esc need not fall below the relative threshold.
+    // Every Newton correction at most kAbsTol is converged: the cooling is
+    // proportional to esc, so what is left is at most kAbsTol of the optically thin
+    // value.
+    constexpr double kAbsTol = 1.0e-12;
+    bool small = true;
+    for (int i = 0; i < N_line; ++i)
+      small = small && std::abs(desc[i]) <= kAbsTol;
+    if (small) {
+      for (int i = 0; i < N_line; ++i) esc_min[i] = esc[i];
+      break;
+    }
 
     // Convergence
     err_max = 0.0;
@@ -206,8 +243,33 @@ double solve_esc_prob(
     if (err_max < thr) break;
   }
   for (int i = 0; i < N_line; ++i) esc[i] = esc_min[i];
-  pop_fn(esc, func, Ld_val);
+  pop_fn(esc, beta, Ld_val);
   return Ld_val;
+}
+
+// One fine-structure system's escape-probability solve is a pure function of its
+// arguments and of the escape probabilities it starts from.  The integrator repeats it
+// at identical inputs -- the abundance columns of an energy-row Jacobian that leave the
+// collision partners unchanged, and the full and first half steps of one attempt, which
+// start from the same state -- so the last results are kept per thread (ExactMemo: a
+// repeated call returns exactly what the solve returns).
+template <int N_line, std::size_t N_arg, class Solve>
+double memo_esc_solve(const std::array<double, N_arg>& args, double esc[N_line],
+                      Solve solve) {
+  constexpr int N_in = static_cast<int>(N_arg) + N_line;
+  thread_local ExactMemo<N_in, 1 + N_line, 16> memo;
+  std::array<double, N_in> in{};
+  for (std::size_t i = 0; i < N_arg; ++i) in[i] = args[i];
+  for (int i = 0; i < N_line; ++i) in[N_arg + i] = esc[i];
+  std::array<double, 1 + N_line> out{};
+  if (memo.find(in, out)) {
+    for (int i = 0; i < N_line; ++i) esc[i] = out[1 + i];
+    return out[0];
+  }
+  out[0] = solve();
+  for (int i = 0; i < N_line; ++i) out[1 + i] = esc[i];
+  memo.insert(in, out);
+  return out[0];
 }
 
 }  // namespace mol_detail
@@ -218,8 +280,8 @@ double solve_esc_prob(
 // Returns Ld_CO [erg cm^3 s^-1 per CO molecule].
 // CO rotational/vibrational cooling (Omukai et al. 2010 Table 3).
 // ---------------------------------------------------------------------------
-inline double co_cool(double nH, double T_K, double y_H2, double Nc_CO,
-                      double tau_cnt) {
+inline double co_cool_eval(double nH, double T_K, double y_H2, double Nc_CO,
+                           double tau_cnt) {
   constexpr double k_B = phys::k_B, m_p = phys::m_p;
   // T axis (log10 K): 13 points
   static constexpr double lTa[13] = {0.477, 0.778, 1.000, 1.301, 1.477,
@@ -301,8 +363,8 @@ inline double co_cool(double nH, double T_K, double y_H2, double Nc_CO,
 // oh_cool — OH cooling (Omukai et al. 2010 / Leiden data)
 // Returns Ld_OH
 // ---------------------------------------------------------------------------
-inline double oh_cool(double nH, double T_K, double y_H2, double Nc_OH,
-                      double tau_cnt) {
+inline double oh_cool_eval(double nH, double T_K, double y_H2, double Nc_OH,
+                           double tau_cnt) {
   constexpr double k_B = phys::k_B, m_p = phys::m_p;
   static constexpr double lTa[6] = {1.477, 1.699, 1.903, 2.000, 2.477, 2.778};
   static constexpr double lNa[9] = {10, 11, 12, 13, 14, 15, 16, 17, 18};
@@ -349,8 +411,8 @@ inline double oh_cool(double nH, double T_K, double y_H2, double Nc_OH,
 // h2o_cool — H2O cooling (Neufeld et al.)
 // Returns Ld_H2O
 // ---------------------------------------------------------------------------
-inline double h2o_cool(double nH, double T_K, double y_H2, double Nc_H2O,
-                       double tau_cnt) {
+inline double h2o_cool_eval(double nH, double T_K, double y_H2, double Nc_H2O,
+                            double tau_cnt) {
   constexpr double k_B = phys::k_B, m_p = phys::m_p;
   // Branch a: T > 100 K
   static constexpr double lTa[6] = {2.000, 2.301, 2.602, 3.000, 3.301, 3.602};
@@ -468,30 +530,36 @@ inline double h2o_cool(double nH, double T_K, double y_H2, double Nc_H2O,
 // ---------------------------------------------------------------------------
 
 // CII fine-structure (2-level, Δ=92K)
-inline double cii_cool_fs(double nH, double T_K, double y_e, double y_a,
-                          double y_m, double tau_cnt, double Nc, double T_rad,
-                          double esc[1]) {
+inline double cii_cool_fs_solve(double nH, double T_K, double y_e, double y_a,
+                                double y_m, double tau_cnt, double Nc,
+                                double T_rad, double esc[1]) {
   constexpr double k_B = phys::k_B, h_Pl = phys::h_P, pi = phys::pi;
   constexpr double m_p = phys::m_p;
   constexpr double g0 = 2.0, g1 = 4.0;
   constexpr double DT_10 = 92.0;
   constexpr double A_10 = 2.4e-6;
 
-  auto pop_fn = [&](const double* e, double* f, double& Ld_out) {
+  // The background and collision terms depend on the temperature, the densities and
+  // the radiation temperature, not on the escape probabilities, so they are evaluated
+  // once per solve; pop_fn combines them with the escape-dependent radiative terms.
+  double Q_10 = mol_detail::Q_bg(DT_10, T_rad);
+  double DE_10 = DT_10 * k_B;
+
+  double gam_e = 2.8e-7 / std::sqrt(T_K * 1.0e-2);
+  double gam_H = 8.0e-10 * std::pow(T_K * 1.0e-2, 0.07);
+  double gam_H2 = 0.5 * gam_H;
+  double C_10 = nH * (y_e * gam_e + y_a * gam_H + y_m * gam_H2);
+  double C_01 = (g1 / g0) * C_10 * std::exp(-DT_10 / T_K);
+
+  auto pop_fn = [&](const double* e, double* beta, double& Ld_out) {
     double esc_10 = e[0];
-    double Q_10 = mol_detail::Q_bg(DT_10, T_rad);
-    double DE_10 = DT_10 * k_B;
-
-    double gam_e = 2.8e-7 / std::sqrt(T_K * 1.0e-2);
-    double gam_H = 8.0e-10 * std::pow(T_K * 1.0e-2, 0.07);
-    double gam_H2 = 0.5 * gam_H;
-    double C_10 = nH * (y_e * gam_e + y_a * gam_H + y_m * gam_H2);
-    double C_01 = (g1 / g0) * C_10 * std::exp(-DT_10 / T_K);
-
     double R_01 = (g1 / g0) * A_10 * esc_10 * Q_10 + C_01;
     double R_10 = esc_10 * A_10 * (1.0 + Q_10) + C_10;
-    double f_1 = R_01 / (R_10 + R_01);
-    double f_0 = R_10 / (R_10 + R_01);
+    // Where no transition connects the levels (R_10 = R_01 = 0: esc = 0 and no
+    // collision partner) the ion stays in the ground level.
+    const double R_sum = R_10 + R_01;
+    double f_1 = R_sum > 0.0 ? R_01 / R_sum : 0.0;
+    double f_0 = R_sum > 0.0 ? R_10 / R_sum : 1.0;
 
     double nu = DE_10 / h_Pl;
     double v_th = std::sqrt(2.0 * k_B * T_K / (12.0 * m_p));
@@ -502,31 +570,38 @@ inline double cii_cool_fs(double nH, double T_K, double y_e, double y_a,
     double num = g1 * f_0 / (g0 * f_1) - 1.0;
     double S_10 =
         (!std::isfinite(num) || std::abs(num) < 1.0e-100) ? 1.0e50 : 1.0 / num;
-    f[0] = esc_10 - mol_detail::beta_esc(tau_10, tau_cnt);
+    beta[0] = mol_detail::beta_esc(tau_10, tau_cnt);
     Ld_out = DE_10 * A_10 * f_1 * esc_10 * (1.0 - Q_10 / S_10) / nH;
   };
   return mol_detail::solve_esc_prob<1>(pop_fn, esc);
 }
 
 // CII metastable (2-level, Δ=62000K)
-inline double cii_cool_meta(double nH, double T_K, double y_e, double tau_cnt,
-                            double Nc, double T_rad, double esc[1]) {
+inline double cii_cool_meta_solve(double nH, double T_K, double y_e,
+                                  double tau_cnt, double Nc, double T_rad,
+                                  double esc[1]) {
   constexpr double k_B = phys::k_B, h_Pl = phys::h_P, pi = phys::pi;
   constexpr double m_p = phys::m_p;
   constexpr double g0 = 6.0, g1 = 12.0;
   constexpr double DT_10 = 6.2e4, A_10 = 3.6;
 
-  auto pop_fn = [&](const double* e, double* f, double& Ld_out) {
+  // The background and collision terms depend on the temperature, the densities and
+  // the radiation temperature, not on the escape probabilities, so they are evaluated
+  // once per solve; pop_fn combines them with the escape-dependent radiative terms.
+  double Q_10 = mol_detail::Q_bg(DT_10, T_rad);
+  double DE_10 = DT_10 * k_B;
+  double gam_e = 2.3e-8 / std::sqrt(T_K * 1.0e-4);
+  double C_10 = nH * y_e * gam_e;
+  double C_01 = (g1 / g0) * C_10 * std::exp(-DT_10 / T_K);
+  auto pop_fn = [&](const double* e, double* beta, double& Ld_out) {
     double esc_10 = e[0];
-    double Q_10 = mol_detail::Q_bg(DT_10, T_rad);
-    double DE_10 = DT_10 * k_B;
-    double gam_e = 2.3e-8 / std::sqrt(T_K * 1.0e-4);
-    double C_10 = nH * y_e * gam_e;
-    double C_01 = (g1 / g0) * C_10 * std::exp(-DT_10 / T_K);
     double R_01 = (g1 / g0) * A_10 * esc_10 * Q_10 + C_01;
     double R_10 = esc_10 * A_10 * (1.0 + Q_10) + C_10;
-    double f_1 = R_01 / (R_10 + R_01);
-    double f_0 = R_10 / (R_10 + R_01);
+    // Electrons are the only collision partner: at y_e = 0 and esc = 0 no transition
+    // connects the levels and the ion stays in the ground level.
+    const double R_sum = R_10 + R_01;
+    double f_1 = R_sum > 0.0 ? R_01 / R_sum : 0.0;
+    double f_0 = R_sum > 0.0 ? R_10 / R_sum : 1.0;
     double nu = DE_10 / h_Pl;
     double v_th = std::sqrt(2.0 * k_B * T_K / (12.0 * m_p));
     double Nc_1 = Nc * f_1, Nc_0 = Nc * f_0;
@@ -535,67 +610,65 @@ inline double cii_cool_meta(double nH, double T_K, double y_e, double tau_cnt,
     double num = g1 * f_0 / (g0 * f_1) - 1.0;
     double S_10 =
         (!std::isfinite(num) || std::abs(num) < 1.0e-100) ? 1.0e50 : 1.0 / num;
-    f[0] = esc_10 - mol_detail::beta_esc(tau_10, tau_cnt);
+    beta[0] = mol_detail::beta_esc(tau_10, tau_cnt);
     Ld_out = DE_10 * A_10 * f_1 * esc_10 * (1.0 - Q_10 / S_10) / nH;
   };
   return mol_detail::solve_esc_prob<1>(pop_fn, esc);
 }
 
 // CI fine-structure (3-level)
-inline double ci_cool_fs(double nH, double T_K, double y_e, double y_a,
-                         double y_m, double tau_cnt, double Nc, double T_rad,
-                         double esc[3]) {
+inline double ci_cool_fs_solve(double nH, double T_K, double y_e, double y_a,
+                               double y_m, double tau_cnt, double Nc,
+                               double T_rad, double esc[3]) {
   constexpr double k_B = phys::k_B, h_Pl = phys::h_P, pi = phys::pi;
   constexpr double m_p = phys::m_p;
   constexpr double g0 = 1.0, g1 = 3.0, g2 = 5.0;
   constexpr double DT_10 = 24.0, DT_20 = 63.0, DT_21 = 39.0;
   constexpr double A_10 = 7.9e-8, A_20 = 2.0e-14, A_21 = 2.7e-7;
 
-  auto pop_fn = [&](const double* e, double* f, double& Ld_out) {
+  // The background and collision terms depend on the temperature, the densities and
+  // the radiation temperature, not on the escape probabilities, so they are evaluated
+  // once per solve; pop_fn combines them with the escape-dependent radiative terms.
+  double Q_10 = mol_detail::Q_bg(DT_10, T_rad),
+         Q_20 = mol_detail::Q_bg(DT_20, T_rad),
+         Q_21 = mol_detail::Q_bg(DT_21, T_rad);
+  double DE_10 = DT_10 * k_B, DE_20 = DT_20 * k_B, DE_21 = DT_21 * k_B;
+
+  // Abrahamsson et al. 2007 collisional rates.  The powers of T are products of
+  // q = T^(-1/4), r = T^(-1/3) and 1/T.
+  const double t1 = 1.0 / T_K, t2 = t1 * t1;
+  const double q = std::pow(T_K, -0.25), q2 = q * q, q3 = q2 * q;
+  const double r = std::pow(T_K, -1.0 / 3.0), r2 = r * r;
+  double lnCH_01 = 3.6593 + 56.6023 * q - 802.9765 * q2 + 5025.1882 * q3 -
+                   17874.4255 * t1 + 38343.6655 * (q * t1) -
+                   49249.4895 * (q2 * t1) + 34789.3941 * (q3 * t1) -
+                   10390.9809 * t2;
+  double lnCH_02 = 10.8377 - 173.4153 * r + 2024.0272 * r2 - 13391.6549 * t1 +
+                   52198.5522 * (r * t1) - 124518.3586 * (r2 * t1) +
+                   178182.5823 * t2 - 140970.6106 * (r * t2) +
+                   47504.5861 * (r2 * t2);
+  double lnCH_12 = 15.8996 - 201.3030 * q + 1533.6164 * q2 - 6491.0083 * q3 +
+                   15921.9239 * t1 - 22691.1632 * (q * t1) +
+                   17334.7529 * (q2 * t1) - 5517.9360 * (q3 * t1);
+  const double u = 4.0 / T_K, u2 = u * u, u4 = u2 * u2;
+
+  double gam01_H = 1.0e-11 * std::exp(lnCH_01);
+  double gam02_H = 1.0e-11 * std::exp(lnCH_02) * std::exp(-(u4 * u4));
+  double gam12_H = 1.0e-11 * std::exp(lnCH_12);
+  double gam10_H = (g0 / g1) * gam01_H * std::exp(DT_10 / T_K);
+  double gam20_H = (g0 / g2) * gam02_H * std::exp(DT_20 / T_K);
+  double gam21_H = (g1 / g2) * gam12_H * std::exp(DT_21 / T_K);
+
+  double g10_e = 3.0e-9, g20_e = 5.0e-9, g21_e = 1.5e-8;
+  double C_10 = nH * (y_e * g10_e + y_a * gam10_H + y_m * 0.05 * gam10_H);
+  double C_20 = nH * (y_e * g20_e + y_a * gam20_H + y_m * 0.5 * gam20_H);
+  double C_21 = nH * (y_e * g21_e + y_a * gam21_H + y_m * 0.5 * gam21_H);
+  double C_01 = (g1 / g0) * C_10 * std::exp(-DT_10 / T_K);
+  double C_02 = (g2 / g0) * C_20 * std::exp(-DT_20 / T_K);
+  double C_12 = (g2 / g1) * C_21 * std::exp(-DT_21 / T_K);
+
+  auto pop_fn = [&](const double* e, double* beta, double& Ld_out) {
     double esc_10 = e[0], esc_20 = e[1], esc_21 = e[2];
-    double Q_10 = mol_detail::Q_bg(DT_10, T_rad),
-           Q_20 = mol_detail::Q_bg(DT_20, T_rad),
-           Q_21 = mol_detail::Q_bg(DT_21, T_rad);
-    double DE_10 = DT_10 * k_B, DE_20 = DT_20 * k_B, DE_21 = DT_21 * k_B;
-
-    // Abrahamsson et al. 2007 collisional rates
-    auto p4 = [](double x) { return std::pow(x, -0.25); };
-    auto p3 = [](double x) { return std::pow(x, -1.0 / 3.0); };
-    double T_K4 = T_K;
-    double lnCH_01 =
-        3.6593 + 56.6023 * p4(T_K4) - 802.9765 * p4(T_K4) * p4(T_K4) +
-        5025.1882 * std::pow(T_K4, -0.75) - 17874.4255 * std::pow(T_K4, -1.0) +
-        38343.6655 * std::pow(T_K4, -1.25) - 49249.4895 * std::pow(T_K4, -1.5) +
-        34789.3941 * std::pow(T_K4, -1.75) - 10390.9809 * std::pow(T_K4, -2.0);
-    double lnCH_02 =
-        10.8377 - 173.4153 * p3(T_K4) + 2024.0272 * std::pow(T_K4, -2.0 / 3.0) -
-        13391.6549 / T_K4 + 52198.5522 * std::pow(T_K4, -4.0 / 3.0) -
-        124518.3586 * std::pow(T_K4, -5.0 / 3.0) +
-        178182.5823 * std::pow(T_K4, -2.0) -
-        140970.6106 * std::pow(T_K4, -7.0 / 3.0) +
-        47504.5861 * std::pow(T_K4, -8.0 / 3.0);
-    double lnCH_12 =
-        15.8996 - 201.3030 * p4(T_K4) + 1533.6164 * p4(T_K4) * p4(T_K4) -
-        6491.0083 * std::pow(T_K4, -0.75) + 15921.9239 / T_K4 -
-        22691.1632 * std::pow(T_K4, -1.25) + 17334.7529 * std::pow(T_K4, -1.5) -
-        5517.9360 * std::pow(T_K4, -1.75);
-
-    double gam01_H = 1.0e-11 * std::exp(lnCH_01);
-    double gam02_H =
-        1.0e-11 * std::exp(lnCH_02) * std::exp(-std::pow(4.0 / T_K4, 8.0));
-    double gam12_H = 1.0e-11 * std::exp(lnCH_12);
-    double gam10_H = (g0 / g1) * gam01_H * std::exp(DT_10 / T_K);
-    double gam20_H = (g0 / g2) * gam02_H * std::exp(DT_20 / T_K);
-    double gam21_H = (g1 / g2) * gam12_H * std::exp(DT_21 / T_K);
-
-    double g10_e = 3.0e-9, g20_e = 5.0e-9, g21_e = 1.5e-8;
-    double C_10 = nH * (y_e * g10_e + y_a * gam10_H + y_m * 0.05 * gam10_H);
-    double C_20 = nH * (y_e * g20_e + y_a * gam20_H + y_m * 0.5 * gam20_H);
-    double C_21 = nH * (y_e * g21_e + y_a * gam21_H + y_m * 0.5 * gam21_H);
-    double C_01 = (g1 / g0) * C_10 * std::exp(-DT_10 / T_K);
-    double C_02 = (g2 / g0) * C_20 * std::exp(-DT_20 / T_K);
-    double C_12 = (g2 / g1) * C_21 * std::exp(-DT_21 / T_K);
-
     double R_10 = esc_10 * A_10 * (1.0 + Q_10) + C_10;
     double R_20 = esc_20 * A_20 * (1.0 + Q_20) + C_20;
     double R_21 = esc_21 * A_21 * (1.0 + Q_21) + C_21;
@@ -625,9 +698,9 @@ inline double ci_cool_fs(double nH, double T_K, double y_e, double y_a,
     double tau21 = tau(A_21, DE_21, g2, g1, f_1, f_2);
     double S10 = S_fn(g1, g0, f_0, f_1), S20 = S_fn(g2, g0, f_0, f_2),
            S21 = S_fn(g2, g1, f_1, f_2);
-    f[0] = esc_10 - mol_detail::beta_esc(tau10, tau_cnt);
-    f[1] = esc_20 - mol_detail::beta_esc(tau20, tau_cnt);
-    f[2] = esc_21 - mol_detail::beta_esc(tau21, tau_cnt);
+    beta[0] = mol_detail::beta_esc(tau10, tau_cnt);
+    beta[1] = mol_detail::beta_esc(tau20, tau_cnt);
+    beta[2] = mol_detail::beta_esc(tau21, tau_cnt);
     Ld_out = (DE_10 * A_10 * f_1 * esc_10 * (1.0 - Q_10 / S10) +
               DE_20 * A_20 * f_2 * esc_20 * (1.0 - Q_20 / S20) +
               DE_21 * A_21 * f_2 * esc_21 * (1.0 - Q_21 / S21)) /
@@ -637,59 +710,57 @@ inline double ci_cool_fs(double nH, double T_K, double y_e, double y_a,
 }
 
 // OI fine-structure (3-level)
-inline double oi_cool_fs(double nH, double T_K, double y_e, double y_a,
-                         double y_m, double tau_cnt, double Nc, double T_rad,
-                         double esc[3]) {
+inline double oi_cool_fs_solve(double nH, double T_K, double y_e, double y_a,
+                               double y_m, double tau_cnt, double Nc,
+                               double T_rad, double esc[3]) {
   constexpr double k_B = phys::k_B, h_Pl = phys::h_P, pi = phys::pi;
   constexpr double m_p = phys::m_p;
   constexpr double g0 = 5.0, g1 = 3.0, g2 = 1.0;
   constexpr double DT_10 = 230.0, DT_20 = 328.0, DT_21 = 98.0;
   constexpr double A_10 = 9.0e-5, A_20 = 1.0e-10, A_21 = 1.7e-5;
 
-  auto pop_fn = [&](const double* e, double* f, double& Ld_out) {
+  // The background and collision terms depend on the temperature, the densities and
+  // the radiation temperature, not on the escape probabilities, so they are evaluated
+  // once per solve; pop_fn combines them with the escape-dependent radiative terms.
+  double Q_10 = mol_detail::Q_bg(DT_10, T_rad),
+         Q_20 = mol_detail::Q_bg(DT_20, T_rad),
+         Q_21 = mol_detail::Q_bg(DT_21, T_rad);
+  double DE_10 = DT_10 * k_B, DE_20 = DT_20 * k_B, DE_21 = DT_21 * k_B;
+
+  // Abrahamsson et al. 2007.  The powers of T are products of v = T^(-3/4),
+  // s = T^(-1/2) and 1/T.
+  const double t1 = 1.0 / T_K, t2 = t1 * t1, t3 = t2 * t1;
+  const double v = std::pow(T_K, -0.75), v2 = v * v, v3 = v2 * v, v4 = v2 * v2;
+  const double v5 = v4 * v, v6 = v3 * v3, v7 = v6 * v;
+  const double s = 1.0 / std::sqrt(T_K);
+  double lnOH_01 = 4.581 - 156.118 * v + 2679.979 * v2 - 78996.962 * v3 +
+                   1308323.468 * v4 - 13011761.861 * v5 + 71010784.971 * v6 -
+                   162826621.855 * v7;
+  double lnOH_02 = 3.297 - 168.382 * v + 1844.099 * v2 - 68362.889 * v3 +
+                   1376864.737 * v4 - 17964610.169 * v5 + 134374927.808 * v6 -
+                   430107587.886 * v7;
+  double lnOH_12 = 3.437 + 17.443 * s - 618.761 * t1 + 3757.156 * (s * t1) -
+                   12736.468 * t2 + 22785.266 * (s * t2) - 22759.228 * t3 +
+                   12668.261 * (s * t3);
+  const double u = 10.0 / T_K, u2 = u * u, u4 = u2 * u2;
+
+  double gam01_H = 1.0e-11 * std::exp(lnOH_01);
+  double gam02_H = 1.0e-11 * std::exp(lnOH_02);
+  double gam12_H = 1.0e-11 * std::exp(lnOH_12) * std::exp(-(u4 * u4));
+  double gam10_H = (g0 / g1) * gam01_H * std::exp(DT_10 / T_K);
+  double gam20_H = (g0 / g2) * gam02_H * std::exp(DT_20 / T_K);
+  double gam21_H = (g1 / g2) * gam12_H * std::exp(DT_21 / T_K);
+
+  double g10_e = 1.4e-8, g20_e = 1.4e-8, g21_e = 5.0e-9;
+  double C_10 = nH * (y_e * g10_e + y_a * gam10_H + y_m * 0.5 * gam10_H);
+  double C_20 = nH * (y_e * g20_e + y_a * gam20_H + y_m * 0.5 * gam20_H);
+  double C_21 = nH * (y_e * g21_e + y_a * gam21_H + y_m * 0.05 * gam21_H);
+  double C_01 = (g1 / g0) * C_10 * std::exp(-DT_10 / T_K);
+  double C_02 = (g2 / g0) * C_20 * std::exp(-DT_20 / T_K);
+  double C_12 = (g2 / g1) * C_21 * std::exp(-DT_21 / T_K);
+
+  auto pop_fn = [&](const double* e, double* beta, double& Ld_out) {
     double esc_10 = e[0], esc_20 = e[1], esc_21 = e[2];
-    double Q_10 = mol_detail::Q_bg(DT_10, T_rad),
-           Q_20 = mol_detail::Q_bg(DT_20, T_rad),
-           Q_21 = mol_detail::Q_bg(DT_21, T_rad);
-    double DE_10 = DT_10 * k_B, DE_20 = DT_20 * k_B, DE_21 = DT_21 * k_B;
-
-    // Abrahamsson et al. 2007
-    double lnOH_01 = 4.581 - 156.118 * std::pow(T_K, -0.75) +
-                     2679.979 * std::pow(T_K, -1.5) -
-                     78996.962 * std::pow(T_K, -2.25) +
-                     1308323.468 * std::pow(T_K, -3.0) -
-                     13011761.861 * std::pow(T_K, -3.75) +
-                     71010784.971 * std::pow(T_K, -4.5) -
-                     162826621.855 * std::pow(T_K, -5.25);
-    double lnOH_02 = 3.297 - 168.382 * std::pow(T_K, -0.75) +
-                     1844.099 * std::pow(T_K, -1.5) -
-                     68362.889 * std::pow(T_K, -2.25) +
-                     1376864.737 * std::pow(T_K, -3.0) -
-                     17964610.169 * std::pow(T_K, -3.75) +
-                     134374927.808 * std::pow(T_K, -4.5) -
-                     430107587.886 * std::pow(T_K, -5.25);
-    double lnOH_12 =
-        3.437 + 17.443 * std::pow(T_K, -0.5) - 618.761 / T_K +
-        3757.156 * std::pow(T_K, -1.5) - 12736.468 * std::pow(T_K, -2.0) +
-        22785.266 * std::pow(T_K, -2.5) - 22759.228 * std::pow(T_K, -3.0) +
-        12668.261 * std::pow(T_K, -3.5);
-
-    double gam01_H = 1.0e-11 * std::exp(lnOH_01);
-    double gam02_H = 1.0e-11 * std::exp(lnOH_02);
-    double gam12_H =
-        1.0e-11 * std::exp(lnOH_12) * std::exp(-std::pow(10.0 / T_K, 8.0));
-    double gam10_H = (g0 / g1) * gam01_H * std::exp(DT_10 / T_K);
-    double gam20_H = (g0 / g2) * gam02_H * std::exp(DT_20 / T_K);
-    double gam21_H = (g1 / g2) * gam12_H * std::exp(DT_21 / T_K);
-
-    double g10_e = 1.4e-8, g20_e = 1.4e-8, g21_e = 5.0e-9;
-    double C_10 = nH * (y_e * g10_e + y_a * gam10_H + y_m * 0.5 * gam10_H);
-    double C_20 = nH * (y_e * g20_e + y_a * gam20_H + y_m * 0.5 * gam20_H);
-    double C_21 = nH * (y_e * g21_e + y_a * gam21_H + y_m * 0.05 * gam21_H);
-    double C_01 = (g1 / g0) * C_10 * std::exp(-DT_10 / T_K);
-    double C_02 = (g2 / g0) * C_20 * std::exp(-DT_20 / T_K);
-    double C_12 = (g2 / g1) * C_21 * std::exp(-DT_21 / T_K);
-
     double R_10 = esc_10 * A_10 * (1.0 + Q_10) + C_10;
     double R_20 = esc_20 * A_20 * (1.0 + Q_20) + C_20;
     double R_21 = esc_21 * A_21 * (1.0 + Q_21) + C_21;
@@ -702,7 +773,7 @@ inline double oi_cool_fs(double nH, double T_K, double y_e, double y_a,
     double f_1 = (f_0 * (R_01 - R_21) + R_21) / (R_10 + R_12 + R_21);
     double f_2 = (f_0 * R_02 + f_1 * R_12) / (R_21 + R_20);
     if (f_1 == 0.0) {
-      f[0] = f[1] = f[2] = 0.0;
+      for (int i = 0; i < 3; ++i) beta[i] = e[i];  // esc is the root
       Ld_out = 0.0;
       return;
     }
@@ -723,9 +794,9 @@ inline double oi_cool_fs(double nH, double T_K, double y_e, double y_a,
     double tau21 = tau(A_21, DE_21, g2, g1, f_1, f_2);
     double S10 = S_fn(g1, g0, f_0, f_1), S20 = S_fn(g2, g0, f_0, f_2),
            S21 = S_fn(g2, g1, f_1, f_2);
-    f[0] = esc_10 - mol_detail::beta_esc(tau10, tau_cnt);
-    f[1] = esc_20 - mol_detail::beta_esc(tau20, tau_cnt);
-    f[2] = esc_21 - mol_detail::beta_esc(tau21, tau_cnt);
+    beta[0] = mol_detail::beta_esc(tau10, tau_cnt);
+    beta[1] = mol_detail::beta_esc(tau20, tau_cnt);
+    beta[2] = mol_detail::beta_esc(tau21, tau_cnt);
     Ld_out = (DE_10 * A_10 * f_1 * esc_10 * (1.0 - Q_10 / S10) +
               DE_20 * A_20 * f_2 * esc_20 * (1.0 - Q_20 / S20) +
               DE_21 * A_21 * f_2 * esc_21 * (1.0 - Q_21 / S21)) /
@@ -733,6 +804,28 @@ inline double oi_cool_fs(double nH, double T_K, double y_e, double y_a,
   };
   return mol_detail::solve_esc_prob<3>(pop_fn, esc);
 }
+
+// The line-cooling entry points used by line_cool_metal.  Each is the evaluation above
+// (co_cool_eval, ..., oi_cool_fs_solve) keeping its last results per thread: the
+// integrator repeats them at identical inputs (the abundance columns of an energy-row
+// Jacobian that leave a line's collision partners unchanged, and the full and first
+// half steps of one attempt, which start from the same state).  Defined out of line in
+// cooling/cooling_memo.cc, so every caller shares one compiled evaluation and a kept
+// result is exactly what that evaluation returns (core/exact_memo.h).
+double co_cool(double nH, double T_K, double y_H2, double Nc_CO,
+               double tau_cnt);
+double oh_cool(double nH, double T_K, double y_H2, double Nc_OH,
+               double tau_cnt);
+double h2o_cool(double nH, double T_K, double y_H2, double Nc_H2O,
+                double tau_cnt);
+double cii_cool_fs(double nH, double T_K, double y_e, double y_a, double y_m,
+                   double tau_cnt, double Nc, double T_rad, double esc[1]);
+double cii_cool_meta(double nH, double T_K, double y_e, double tau_cnt,
+                     double Nc, double T_rad, double esc[1]);
+double ci_cool_fs(double nH, double T_K, double y_e, double y_a, double y_m,
+                  double tau_cnt, double Nc, double T_rad, double esc[3]);
+double oi_cool_fs(double nH, double T_K, double y_e, double y_a, double y_m,
+                  double tau_cnt, double Nc, double T_rad, double esc[3]);
 
 // ---------------------------------------------------------------------------
 // line_cool_metal — combines all line cooling for one cell/time step.
@@ -770,28 +863,33 @@ inline void line_cool_metal(
     double Ld = co_cool(nH, T_K, y_H2, Nc_CO, tau_cnt);
     double Ldr = co_cool(nH, T_rad, y_H2, Nc_CO, tau_cnt);
     rates.CO = emit(Ld - Ldr, y_CO);
+    rates.per_CO = emit(Ld - Ldr, 1.0);
   }
   // OH
   {
     double Ld = oh_cool(nH, T_K, y_H2, Nc_OH, tau_cnt);
     double Ldr = oh_cool(nH, T_rad, y_H2, Nc_OH, tau_cnt);
     rates.OH = emit(Ld - Ldr, y_OH);
+    rates.per_OH = emit(Ld - Ldr, 1.0);
   }
   // H2O
   {
     double Ld = h2o_cool(nH, T_K, y_H2, Nc_H2O, tau_cnt);
     double Ldr = h2o_cool(nH, T_rad, y_H2, Nc_H2O, tau_cnt);
     rates.H2O = emit(Ld - Ldr, y_H2O);
+    rates.per_H2O = emit(Ld - Ldr, 1.0);
   }
   // CII (fine + metastable)
   {
     double Ld_fs = cii_cool_fs(nH, T_K, y_e, y_H, y_H2, tau_cnt, Nc_CII, T_rad,
                                es.esc_CII);
     rates.CII = emit(Ld_fs, y_CII);
+    rates.per_CII = emit(Ld_fs, 1.0);
     if (T_K > 200.0) {
       double Ld_m =
           cii_cool_meta(nH, T_K, y_e, tau_cnt, Nc_CII, T_rad, es.esc_CIImeta);
       rates.CII += emit(Ld_m, y_CII);
+      rates.per_CII += emit(Ld_m, 1.0);
     }
   }
   // CI (fine + metastable)
@@ -799,6 +897,7 @@ inline void line_cool_metal(
     double Ld_fs =
         ci_cool_fs(nH, T_K, y_e, y_H, y_H2, tau_cnt, Nc_CI, T_rad, es.esc_CI);
     rates.CI = emit(Ld_fs, y_CI);
+    rates.per_CI = emit(Ld_fs, 1.0);
     // (metastable CI: T > 3000 K — similar 3-level system, omitted for brevity)
   }
   // OI (fine; skip if T < 15 K)
@@ -807,8 +906,10 @@ inline void line_cool_metal(
       double Ld_fs =
           oi_cool_fs(nH, T_K, y_e, y_H, y_H2, tau_cnt, Nc_OI, T_rad, es.esc_OI);
       rates.OI = emit(Ld_fs, y_OI);
+      rates.per_OI = emit(Ld_fs, 1.0);
     } else {
       rates.OI = 0.0;
+      rates.per_OI = 0.0;
     }
   }
   // Ly-alpha (H I recombination cooling, nH ≤ 1e10)

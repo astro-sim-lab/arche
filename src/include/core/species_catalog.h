@@ -130,6 +130,15 @@ enum class SpId : int {
   CH2_p,
   CH3_p,
   CH4_p,
+  // Metals locked in the refractory dust, released to the gas as the grains
+  // evaporate, and the grain-volume tracer of the evaporation (the smallest
+  // grain volume reached so far, relative to the volume at T -> 0)
+  C_s,
+  O_s,
+  Mg_s,
+  Na_s,
+  K_s,
+  Gr_v,
   Count
 };
 
@@ -200,6 +209,11 @@ inline constexpr SpeciesInfo kSpeciesCatalog[] = {
     {SpId::C_p, "C_p", 12.0},      {SpId::CH_p, "CH_p", 13.00783},
     {SpId::CH2_p, "CH2_p", 14.01565}, {SpId::CH3_p, "CH3_p", 15.02348},
     {SpId::CH4_p, "CH4_p", 16.0313},
+    // Metals locked in the dust (mass of the atom) and the grain-volume tracer
+    // (dimensionless; mass placeholder, not used by any kernel)
+    {SpId::C_s, "C_s", 12.0},      {SpId::O_s, "O_s", 15.99491},
+    {SpId::Mg_s, "Mg_s", 24.305},  {SpId::Na_s, "Na_s", 22.98977},
+    {SpId::K_s, "K_s", 39.0983},   {SpId::Gr_v, "Gr_v", 0.0},
 };
 // clang-format on
 

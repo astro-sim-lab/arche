@@ -29,7 +29,6 @@ using collapse_defaults::kGGrav;
 using collapse_defaults::kKB;
 using collapse_defaults::kMp;
 using collapse_defaults::kPi;
-using collapse_defaults::kTHighStop;
 
 // ---------------------------------------------------------------------------
 // LoadFretTable — read a 2-column ASCII table: nH[cm^-3]  f_ret
@@ -147,8 +146,6 @@ inline int to_exit_code(ExitReason reason) {
       return 0;
     case ExitReason::MaxIter:
       return 1;
-    case ExitReason::HighTemp:
-      return 2;
     case ExitReason::NegEnergy:
       return 3;
     case ExitReason::NonFinite:
@@ -166,14 +163,12 @@ inline const char* exit_message(ExitReason reason) {
       return "Normal: nH reached nH_stop";
     case ExitReason::MaxIter:
       return "Abnormal: max_iter reached";
-    case ExitReason::HighTemp:
-      return "Normal: T_K reached 1e5 K ceiling";
     case ExitReason::NegEnergy:
       return "Abnormal: internal energy e <= 0";
     case ExitReason::NonFinite:
       return "Abnormal: NaN/Inf in nH or T_K";
     case ExitReason::SolverFailed:
-      return "Abnormal: NR subcycle max depth exceeded";
+      return "Abnormal: chem_full_step returned solver_failed";
     default:
       return "Unknown";
   }
@@ -186,9 +181,8 @@ inline int report_exit(ExitReason reason, const char* label) {
   const int code = to_exit_code(reason);
   const char* msg = exit_message(reason);
   std::printf("=== EXIT code=%d: %s ===\n", code, msg);
-  // Normal (nH ceiling) and HighTemp (T ceiling) are both expected ends of a
-  // collapse — reaching the validated T_max = 1e5 K boundary is not an error.
-  if (reason != ExitReason::Normal && reason != ExitReason::HighTemp)
+  // Only Normal (nH ceiling) is an expected end of a collapse.
+  if (reason != ExitReason::Normal)
     std::fprintf(stderr, "WARNING [%s]: %s\n", label, msg);
   return code;
 }
@@ -200,10 +194,6 @@ inline bool check_exit(double nH, double T_K, double e, double nH_stop,
                        ExitReason& reason) {
   if (nH > nH_stop) {
     reason = ExitReason::Normal;
-    return true;
-  }
-  if (T_K > kTHighStop) {
-    reason = ExitReason::HighTemp;
     return true;
   }
   if (!std::isfinite(nH) || !std::isfinite(T_K)) {
@@ -221,34 +211,24 @@ inline bool check_exit(double nH, double T_K, double e, double nH_stop,
 // ConservationTally — run-level summary of the element/charge projection
 //
 // Why this exists: a projection that never fires is invisible in the output.
-// On the metal network the K and Na rows start empty, because the collapse app
-// holds both elements wholly in its own grain reservoir, and an empty row can
-// take the whole weighted matrix down with it and leave most steps
-// unprojected.  n_invariants would still read the expected 10, the run would
-// complete, and the file would look normal.  This tally puts that state into
-// the run's own stdout and output file.
+// This tally puts the number of projected steps into the run's own stdout and
+// output file.
 //
-// Read the counts together with rows (= n_invariants).  With rows == 0 the
-// network registers no invariant rows, so conservation::project() declines
-// immediately and EVERY step is unprojected by design.  With rows > 0 an
-// unprojected step in a collapse app is an anomaly: the other ordinary reason
-// the flag is false — a step that did not converge — cannot appear here,
-// because chem_full_step_*() returns solver_failed on that path and the loop
-// breaks before record() is reached.  What remains are project()'s own decline
-// paths: an empty row that still owes a residual, a weighted matrix that is not
-// positive definite, a repair beyond conservation::kMaxRelShift, and (only if
-// the table itself is malformed) a row count outside 1..kMaxRows.
+// Read the counts together with rows (= n_invariants).  chem_full_step_*()
+// rejects an internal step whose projection declines and fails the call when it
+// cannot complete, and the loop then breaks before record() is reached; so in a
+// collapse app every recorded step is projected (n_projected == n_steps).  With
+// rows == 0 every call fails on the first step.  An unprojected recorded step
+// would mean that chem_full_step_*() reported success without projecting.
 //
 // ⚠ rows is the CONFIGURED count, not the count enforced on a step.  The
 // projection weights each species by its own abundance, so a row whose carrier
 // species are all zero contributes nothing and is dropped from that step's
 // solve while the step still counts as projected.  That is correct — the row
-// owes nothing — but it means rows == 10 with n_projected == n_steps does not
-// assert that ten invariants held on every step.  Measured example: a Z = 1
-// metal-grain collapse keeps all K and Na in the app-side grain reservoir until
-// the grains evaporate at nH ~ 1.7e15, so eight of ten rows are solved over
-// 68.9 % of that run.  This tally does NOT detect a row that is wrongly
-// inactive for the whole run; only a decline of the entire solve.
+// owes nothing — but it means rows == 11 with n_projected == n_steps does not
+// assert that eleven rows carried a non-zero total on every step.  This tally
+// does NOT detect a row that is wrongly inactive for the whole run; only a
+// decline of the entire solve.
 // ---------------------------------------------------------------------------
 struct ConservationTally {
   // Counters are int because the collapse loop bound max_iter is int, so the
@@ -310,10 +290,8 @@ inline void report_conservation(const ConservationTally& t, int n_invariants) {
 // ---------------------------------------------------------------------------
 // write_conservation_attrs — record the summary as HDF5 FILE ATTRIBUTES
 //
-// Attributes, not datasets: a per-step column would take primordial from 25 to
-// 26 datasets and force every stored baseline to be rebuilt.  As attributes the
-// dataset count and every stored number are unchanged, so the primordial output
-// stays byte-identical to main while the projection becomes observable.
+// Attributes, not datasets: a run-level summary needs no per-step column, and
+// as attributes they leave every dataset name, shape and value unchanged.
 //
 // Written next to exit_code / exit_message by both collapse apps, so the two
 // apps cannot drift apart on attribute names.

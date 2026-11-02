@@ -13,7 +13,7 @@
 // In a 3-D fluid code the caller would:
 //   - compute zeta from an attenuation model or ray-tracing
 //   - supply Nc_H/H2/HD from column integration (TreeCol, Sobolev, etc.)
-//   - supply tau_cnt/esc_cnt from the opacity field
+//   - supply the continuum shielding column rho*L (cnt_column)
 //
 // Here we approximate column densities as n × L_Jeans (same as the
 // 1-D collapse app) purely for illustration.
@@ -194,11 +194,6 @@ int main() {
   arche::ChemParams params{};
   params.T_rad = 2.725 * (1.0 + zred);  // CMB temperature [K]
 
-  // ── Persistent opacity across steps ──────────────────────────────────────
-  double k_gas = 0.0;
-  double tau_cnt = 0.0;
-  double esc_cnt = 1.0;
-
   // ── Print header ──────────────────────────────────────────────────────────
   std::printf(
       "# primordial chemistry demo: nH=%g cm^-3  T_K=%g K  zeta0=%g s^-1"
@@ -228,9 +223,6 @@ int main() {
     const double Nc_H2 = y[1] * nH * lmbd_J;
     const double Nc_HD = y[12] * nH * lmbd_J;
 
-    tau_cnt = k_gas * rho * lmbd_J;
-    esc_cnt = (tau_cnt > 1.0) ? 1.0 / (tau_cnt * tau_cnt) : 1.0;
-
     // Build shielding environment (caller-supplied in a real fluid code)
     arche::ChemShielding shield;
     shield.zeta = zeta0 * std::exp(-rho * lmbd_J / cr_atten_col_dens);
@@ -238,8 +230,7 @@ int main() {
     shield.Nc_H2 = Nc_H2;
     shield.Nc_HD = Nc_HD;
     shield.J_LW21 = jlw21;
-    shield.tau_cnt = tau_cnt;
-    shield.esc_cnt = esc_cnt;
+    shield.cnt_column = rho * lmbd_J;  // continuum depth = opacity * column
 
     st.nH = nH;  // fixed (isothermal/isochoric demo)
     st.T_K = T_K;
@@ -251,7 +242,6 @@ int main() {
 
     mu = st.mu;
     gamma = st.gamma;
-    k_gas = rates.k_gas;
 
     // Print
     std::printf(

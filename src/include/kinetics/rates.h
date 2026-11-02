@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 
 #include "core/state.h"
 #include "kinetics/partition_function.h"
@@ -16,7 +17,7 @@
 //
 // Provides:
 //   pow_int(x, n)              — integer-exponent power for small exponents.
-//   detail::eval_opacity(...)  — continuum opacity k_prm [cm²/g].
+//   detail::eval_opacity(...)  — gas continuum opacity k_prm [cm²/g].
 //   PrimRateContext            — species-independent intermediate quantities
 //                                (temperature powers, LTE critical densities,
 //                                LTE/low-density blend sub-rates).
@@ -51,7 +52,9 @@ inline double pow_int(double x, int n) {
 namespace detail {
 
 // ---------------------------------------------------------------------------
-// eval_opacity — bilinear interpolation of continuum opacity table k_prm
+// eval_opacity — bilinear interpolation of the gas Planck-mean opacity table k_prm
+//   (log10 k [cm^2/g], at LTE composition) in (T6, log10 R), T6 = T / 1e6 K,
+//   R = rho / T6^3.
 // ---------------------------------------------------------------------------
 inline double eval_opacity(double T_K, double rho) {
   static constexpr std::array<double, 57> T6 = {
@@ -207,21 +210,29 @@ inline double eval_opacity(double T_K, double rho) {
        {-0.460, -0.447, -0.405, -0.335, -0.213, -0.026, 0.238, 0.577, 0.972,
         0.000, 0.000, 0.000, 0.000, 0.000, 0.000, 0.000, 0.000, 0.000, 0.000}}};
 
-  double temp6 = T_K / 1.0e6;
+  // The table holds data up to log R = 4 for T6 <= 2.5e-2, 3 for T6 <= 4e-2 and -1
+  // above; the columns past a row's last valid one are placeholders. Above the data in
+  // log R and below 750 K the opacity is continued continuously, so that a solve
+  // crossing those edges sees no jump:
+  //   log R above the data: the row's last valid value (the rows at T6 = 3e-2..4e-2
+  //     already repeat it);
+  //   T below 750 K: the value at 750 K and the same density.
+  // Below log R = -5 it is zero: there the LTE composition the table assumes
+  // overstates the ionization of the gas, and extending the table would add continuum
+  // cooling the gas does not have. Above T6 = 1 the bilinear form is extrapolated in T6.
+  static constexpr auto k_tab = [] {
+    auto k = rlgk;
+    for (int i = 0; i < 57; ++i) {
+      const int last = T6[i] <= 2.5e-2 ? 18 : (T6[i] <= 4.0e-2 ? 16 : 8);
+      for (int j = last + 1; j < 19; ++j) k[i][j] = k[i][last];
+    }
+    return k;
+  }();
+
+  double temp6 = std::max(T_K / 1.0e6, T6[0]);
   double rlogR = std::log10(rho / (temp6 * temp6 * temp6));
-
-  bool in_T_lo = (temp6 >= 0.75e-3) && (temp6 <= 2.5e-2);
-  bool in_T_mid = (temp6 >= 2.5e-2) && (temp6 <= 4.0e-2);
-  bool in_T_hi = (temp6 > 4.0e-2);
-  bool in_R_full = (rlogR >= -5.0) && (rlogR <= 4.0);
-  bool in_R_mid = (rlogR >= -5.0) && (rlogR <= 3.0);
-  bool in_R_hi = (rlogR >= -5.0) && (rlogR <= -1.0);
-
-  bool do_interp =
-      (in_T_lo && in_R_full) || (in_T_mid && in_R_mid) || (in_T_hi && in_R_hi);
-
-  if (temp6 < 0.75e-3 || rlogR < -5.0) return 0.0;
-  if (!do_interp) return 1.0e5;
+  if (rlogR < rlgR[0]) return 0.0;
+  rlogR = std::min(rlogR, rlgR[18]);
 
   int ms = 56;
   for (int i = 0; i < 57; ++i)
@@ -241,9 +252,9 @@ inline double eval_opacity(double T_K, double rho) {
 
   double t = (temp6 - T6[ms - 1]) / (T6[ms] - T6[ms - 1]);
   double u = (rlogR - rlgR[ns - 1]) / (rlgR[ns] - rlgR[ns - 1]);
-  double rlogk = (1.0 - t) * (1.0 - u) * rlgk[ms - 1][ns - 1] +
-                 t * (1.0 - u) * rlgk[ms][ns - 1] + t * u * rlgk[ms][ns] +
-                 (1.0 - t) * u * rlgk[ms - 1][ns];
+  double rlogk = (1.0 - t) * (1.0 - u) * k_tab[ms - 1][ns - 1] +
+                 t * (1.0 - u) * k_tab[ms][ns - 1] + t * u * k_tab[ms][ns] +
+                 (1.0 - t) * u * k_tab[ms - 1][ns];
   return std::pow(10.0, rlogk);
 }
 
@@ -256,8 +267,7 @@ inline double eval_opacity(double T_K, double rho) {
 // rate law and by the reverse / LTE-correction step, so the heavy shared
 // pieces (LTE critical densities, the LTE/low-density blend sub-rates) are
 // computed a single time.  Sharing these through one context keeps the rate
-// laws free of global reaction-id coupling while preserving the exact original
-// operation order (bit-for-bit).
+// laws free of global reaction-id coupling.
 // ---------------------------------------------------------------------------
 struct PrimRateContext {
   double T_K, nH;
@@ -347,8 +357,7 @@ inline PrimRateContext build_prim_context(double T_K, double nH, double H,
 //                     legitimately evaluate to 0.
 // lte_blend_noguard — unguarded form: the caller guarantees both inputs are
 //                     strictly positive (e.g. products of exp()), so no zero
-//                     check is performed. Kept separate to preserve the exact
-//                     original control flow (bit-for-bit).
+//                     check is performed.
 // ---------------------------------------------------------------------------
 inline double lte_blend(double k_v0, double k_LTE, double crit_ratio) {
   if (k_v0 == 0.0 || k_LTE == 0.0) return 0.0;
@@ -364,6 +373,40 @@ inline double lte_blend_noguard(double k_v0, double k_LTE, double crit_ratio) {
 }
 
 // ---------------------------------------------------------------------------
+// Rate sinks.  The rate kernels address coefficients by the index of a model's
+// own table (k[num-1] forward, k[num-1 + N_react] reverse) and write through a sink:
+//   DirectRates<N_react> — every index, straight into that model's k_rxn (the full
+//                          networks; want() is a compile-time true, so the kernels
+//                          compile to the unguarded writes).
+//   MappedRates          — a compact model that keeps a subset of a full network's
+//                          reactions: only the kept full indices are evaluated, and
+//                          each lands directly in its compact slot (map[full index]
+//                          = compact index, or -1).  A kernel evaluates a law only
+//                          when want(index) holds; a read of an index the model
+//                          does not keep returns NaN, so a law that depended on one
+//                          would show in the result instead of passing silently.
+// ---------------------------------------------------------------------------
+template <int N_react>
+struct DirectRates {
+  std::array<double, 2 * N_react>& k;
+  static constexpr bool want(int) { return true; }
+  double& operator[](int i) { return k[i]; }
+};
+
+struct MappedRates {
+  double* k;  // the compact model's k_rxn (2 * its N_react)
+  const int*
+      map;  // full index (2 * full N_react entries) -> compact index or -1
+  double unkept = 0.0;
+  bool want(int i) const { return map[i] >= 0; }
+  double& operator[](int i) {
+    if (map[i] >= 0) return k[map[i]];
+    unkept = std::numeric_limits<double>::quiet_NaN();
+    return unkept;
+  }
+};
+
+// ---------------------------------------------------------------------------
 // compute_reverse_loop — main reverse-rate loop via detailed balance.
 //
 // For each reaction ire in [0, n_loop), computes the equilibrium constant
@@ -375,26 +418,41 @@ inline double lte_blend_noguard(double k_v0, double k_LTE, double crit_ratio) {
 //   Primordial:  dE/kB/T (two divisions), ternary zero-guard on kfwd
 //   MetalGrain:  dE/(kB*T), updates lnKeqb for photo escape factor
 //
-// Plain `inline` (not force-inlined): benchmarking showed no wall-clock
-// benefit from __attribute__((always_inline)) on the rate/cooling kernels
-// (forced inlining was marginally slower, within noise), so inlining is left
-// to the compiler.
+// Plain `inline` (not force-inlined): inlining is left to the compiler.
 // ---------------------------------------------------------------------------
-template <RateForm Form, int N_sp, int N_react>
-inline void compute_reverse_loop(std::array<double, 2 * N_react>& k_rxn,
-                                 double T_K, double tau_cnt, int n_loop,
-                                 const ReactionTable<N_sp, N_react>& tbl,
-                                 const std::array<double, N_sp + 3>& pf,
-                                 std::array<double, N_react>& lnKeqb) {
+//
+// compute_reverse_loop_into (k_rxn a DirectRates / MappedRates sink) skips a reaction
+// whose reverse the sink does not keep; compute_reverse_loop is the full loop on an
+// array.
+template <RateForm Form, int N_sp, int N_react, class K>
+inline void compute_reverse_loop_into(K& k_rxn, double T_K, double tau_cnt,
+                                      int n_loop,
+                                      const ReactionTable<N_sp, N_react>& tbl,
+                                      const std::array<double, N_sp + 3>& pf,
+                                      std::array<double, N_react>& lnKeqb) {
   constexpr double k_B = phys::k_B;
   constexpr double h_P = phys::h_P;
   constexpr double pi = phys::pi;
 
   const double lnC1_base = std::log(2.0 * pi * k_B * T_K / (h_P * h_P));
 
+  // ln pf of a species, taken once per call (pf is fixed within it) on first use.
+  std::array<double, N_sp + 3> lnpf;
+  lnpf.fill(std::numeric_limits<double>::quiet_NaN());
+  auto ln_pf = [&](int i) {
+    if (std::isnan(lnpf[i])) lnpf[i] = std::log(pf[i]);
+    return lnpf[i];
+  };
+  // k exp(lnK) = exp(ln k + lnK); the product form where it cannot overflow first.
+  auto k_exp = [](double k, double lnK) {
+    return (k > 0.0 && lnK < 700.0) ? k * std::exp(lnK)
+                                    : std::exp(std::log(k) + lnK);
+  };
+
   for (int ire = 0; ire < n_loop; ++ire) {
     int num = tbl.reactions[ire].num;
     if (num < 1 || num > N_react) continue;
+    if (!k_rxn.want(num - 1 + N_react)) continue;
     int r1 = tbl.reactions[ire].reactants[0],
         r2 = tbl.reactions[ire].reactants[1],
         r3 = tbl.reactions[ire].reactants[2];
@@ -407,8 +465,8 @@ inline void compute_reverse_loop(std::array<double, 2 * N_react>& k_rxn,
 
     double lnC1 = 1.5 * (nr - np) * lnC1_base;
     double lnCm = std::log(Cm);
-    double lnCpf = std::log(pf[r1]) + std::log(pf[r2]) + std::log(pf[r3]) -
-                   std::log(pf[p1]) - std::log(pf[p2]) - std::log(pf[p3]);
+    double lnCpf =
+        ln_pf(r1) + ln_pf(r2) + ln_pf(r3) - ln_pf(p1) - ln_pf(p2) - ln_pf(p3);
 
     double lnKeqb_val;
     if constexpr (Form == RateForm::Primordial)
@@ -429,24 +487,34 @@ inline void compute_reverse_loop(std::array<double, 2 * N_react>& k_rxn,
         if constexpr (Form == RateForm::MetalGrain) {
           lnKeqb_val += std::log(esc_fact);
           lnKeqb[n] = lnKeqb_val;
-          k_rxn[n + N_react] = std::exp(std::log(k_rxn[n]) + lnKeqb_val);
+          k_rxn[n + N_react] = k_exp(k_rxn[n], lnKeqb_val);
         } else {
           double lnKeqb_esc = lnKeqb_val + std::log(esc_fact);
-          k_rxn[n + N_react] = (k_rxn[n] > 0.0)
-                                   ? std::exp(std::log(k_rxn[n]) + lnKeqb_esc)
-                                   : 0.0;
+          k_rxn[n + N_react] =
+              (k_rxn[n] > 0.0) ? k_exp(k_rxn[n], lnKeqb_esc) : 0.0;
         }
       }
     } else {
       if constexpr (Form == RateForm::Primordial)
         k_rxn[n + N_react] =
-            (k_rxn[n] > 0.0) ? std::exp(std::log(k_rxn[n]) + lnKeqb_val) : 0.0;
+            (k_rxn[n] > 0.0) ? k_exp(k_rxn[n], lnKeqb_val) : 0.0;
       else
-        k_rxn[n + N_react] = std::exp(std::log(k_rxn[n]) + lnKeqb_val);
+        k_rxn[n + N_react] = k_exp(k_rxn[n], lnKeqb_val);
     }
 
     if (k_rxn[n] == 0.0) k_rxn[n + N_react] = 0.0;
   }
+}
+
+template <RateForm Form, int N_sp, int N_react>
+inline void compute_reverse_loop(std::array<double, 2 * N_react>& k_rxn,
+                                 double T_K, double tau_cnt, int n_loop,
+                                 const ReactionTable<N_sp, N_react>& tbl,
+                                 const std::array<double, N_sp + 3>& pf,
+                                 std::array<double, N_react>& lnKeqb) {
+  DirectRates<N_react> k{k_rxn};
+  compute_reverse_loop_into<Form, N_sp, N_react>(k, T_K, tau_cnt, n_loop, tbl,
+                                                 pf, lnKeqb);
 }
 
 // ---------------------------------------------------------------------------

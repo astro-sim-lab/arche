@@ -234,7 +234,7 @@ constexpr int H_gr_3body = 1114;      // k_rxn[1114] H + grain + H2
 }  // namespace grain_H2
 }  // namespace cooling_idx
 
-// var[] range summed for CR heating (chemistry.h chem_step / chem_full_step).
+// var[] range summed for CR heating (solve/integrator.h cr_heating).
 // Loop body: for (int i = cr_heat_var_begin; i < cr_heat_var_end; ++i)
 constexpr int cr_heat_var_begin = 543;
 constexpr int cr_heat_var_end = 552;  // exclusive

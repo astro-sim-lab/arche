@@ -46,7 +46,8 @@
 //                          currently supported: solar, default
 //
 // HDF5 layout (root-level datasets):
-//   y          (N_rows, N_sp=89) float64 — species abundances / nH
+//   y          (N_rows, N_sp) float64 — species abundances / nH (N_sp = 95;
+//              44 for the minimal build)
 //   nH        (N_rows,)   — H number density [cm^-3]
 //   T_K        (N_rows,)   — gas temperature [K]
 //   T_gr_K     (N_rows,)   — grain temperature [K]
@@ -106,13 +107,54 @@
 #include "collapse_dynamics.h"
 #include "core/hdf5_utils.h"
 #include "solve/chemistry.h"  // kernel helpers still used: c_H2, detail::, xray::
+#include <cstdlib>
+
+// With METAL_SAHA_NT_TOL=<x> (x > 0), the solver
+// takes the Saha regime above nH_eq even with cosmic rays when their estimated shift of
+// y_e at the Saha state is at most x (ChemParams::saha_nonthermal_tol). Unset = the
+// library default; 0 = never with zeta > 0.
+static double SahaNonthermalTol() {
+  static const double tol = [] {
+    const char* e = std::getenv("METAL_SAHA_NT_TOL");
+    return (e != nullptr && e[0] != '\0')
+               ? std::stod(e)
+               : arche::ChemParams{}.saha_nonthermal_tol;
+  }();
+  return tol;
+}
+
+// METAL_USE_SAHA=0 solves the kinetic network by Newton
+// at every density (ChemParams::use_saha); METAL_SAHA_NH=<nH> moves the Saha threshold
+// (ChemParams::saha_threshold_nH, default 1e18 cm^-3).
+static bool UseSaha() {
+  static const bool on = [] {
+    const char* e = std::getenv("METAL_USE_SAHA");
+    return !(e != nullptr && std::string(e) == "0");
+  }();
+  return on;
+}
+// METAL_RTOL / METAL_ATOL / METAL_RTOL_T override the
+// error-controlled integrator's weights (ChemParams::rtol / atol / rtol_T). Unset = the
+// library defaults.
+static double TolFromEnv(const char* name, double fallback) {
+  const char* e = std::getenv(name);
+  return (e != nullptr && e[0] != '\0') ? std::stod(e) : fallback;
+}
+
+static double SahaThresholdNH() {
+  static const double nh = [] {
+    const char* e = std::getenv("METAL_SAHA_NH");
+    return (e != nullptr && e[0] != '\0') ? std::stod(e) : 1.0e18;
+  }();
+  return nh;
+}
 
 namespace {
 
 // ─── compile-time network variant (full vs. compact "minimal") ───────────────
 // Both builds drive their model through the libarche facade (api/arche_api.h):
 // the full build uses Nakauchi2021 (MetalCell), the reduced build
-// (-DARCHE_METAL_MINIMAL) uses the compact 40-species / 103+10-reaction
+// (-DARCHE_METAL_MINIMAL) uses the compact 44-species / 103+10-reaction
 // Nakauchi2021_Minimal (MetalMinimalCell).  Each variant defines its species
 // count (kNSp), species-index enum (AppSp), cell/state/step entry points,
 // reaction-table type (AppTable) and creator, the charge/EOS reductions that
@@ -124,7 +166,7 @@ using AppTable = arche::MetalMinimalTable;
 using AppCellPtr = arche::MetalMinimalCellPtr;
 using AppTablePtr = arche::MetalMinimalTablePtr;
 using AppSp = arche::metal_grain_minimal::Sp;
-constexpr int kNSp = arche::metal_grain_minimal::N_sp;  // 40
+constexpr int kNSp = arche::metal_grain_minimal::N_sp;  // 44
 inline AppCellPtr AppCellCreateOwned() {
   return arche::metal_minimal_cell_create_owned();
 }
@@ -155,14 +197,15 @@ inline double AppChargeMinus(const std::array<double, kNSp>& y) {
   return y[AppSp::e] + y[AppSp::Hm] + y[AppSp::Grm] + 2.0 * y[AppSp::Gr2m];
 }
 constexpr const char* kNetworkLabel =
-    "metal_grain_minimal N_sp=40 N_react=113 "
-    "(Nakauchi2021 minimal: compact 40-species / 103+10-reaction network)";
+    "metal_grain_minimal N_sp=44 N_react=113 "
+    "(Nakauchi2021 minimal: compact 44-species / 103+10-reaction network)";
 constexpr const char* kOutputTag = "_min";
 constexpr const char* kSpeciesCsv =
     "H,H2,e-,H+,H2+,H3+,H-,He,He+,D,HD,D+,"
     "C,CH,CH2,C+,O,O2,OH,CO,H2O,HCO,O+,OH+,H2O+,HCO+,H3O+,"
     "Li,Li+,Mg,Mg+,Gr,Gr+,Gr-,Gr2-,"
-    "O(gr),OH(gr),CO(gr),H2O(gr),C(gr)";
+    "O(gr),OH(gr),CO(gr),H2O(gr),C(gr),"
+    "C(s),O(s),Mg(s),Gr_v";
 #else
 using AppCell = arche::MetalCell;
 using AppTable = arche::MetalTable;
@@ -198,7 +241,7 @@ inline double AppChargePlus(const std::array<double, kNSp>& y) {
 inline double AppChargeMinus(const std::array<double, kNSp>& y) {
   return y[2] + y[6] + y[15] + y[53] + y[66] + 2.0 * y[67];
 }
-constexpr const char* kNetworkLabel = "metal_grain N_sp=89 N_react=1200";
+constexpr const char* kNetworkLabel = "metal_grain N_sp=95 N_react=1200";
 constexpr const char* kOutputTag = "";
 constexpr const char* kSpeciesCsv =
     "H,H2,e-,H+,H2+,H3+,H-,He,He+,He++,HeH+,"
@@ -212,7 +255,8 @@ constexpr const char* kSpeciesCsv =
     "H(gr),H(ch),H2(gr),D(gr),D(ch),HD(gr),"
     "O(gr),O2(gr),OH(gr),CO(gr),CO2(gr),H2O(gr),"
     "HO2(gr),H2O2(gr),HCO(gr),H2CO(gr),"
-    "C(gr),CH(gr),CH2(gr),CH3(gr),CH4(gr)";
+    "C(gr),CH(gr),CH2(gr),CH3(gr),CH4(gr),"
+    "C(s),O(s),Mg(s),Na(s),K(s),Gr_v";
 #endif
 
 // ─── physical constants (CGS) — from collapse_defaults.h ─────────────────────
@@ -229,7 +273,6 @@ using collapse_defaults::kDtFactorChem;
 using collapse_defaults::kDtFactorInit;
 using collapse_defaults::kNInitSteps;
 using collapse_defaults::kTCMB0;
-using collapse_defaults::kTHighStop;
 using collapse_defaults::kXnHStop;
 
 // ─── CR attenuation constants (metal-specific) ───────────────────────────────
@@ -317,13 +360,12 @@ void WriteHdf5File(hid_t fid, const std::string& cr_tag,
   // ── Root attributes ───────────────────────────────────────────────────────
   {
     char desc[160];
-    std::snprintf(desc, sizeof(desc),
-                  "metal_grain collapse CR%s Z%s (C++ port)", cr_tag.c_str(),
-                  z_tag.c_str());
+    std::snprintf(desc, sizeof(desc), "metal_grain one-zone collapse CR%s Z%s",
+                  cr_tag.c_str(), z_tag.c_str());
     H5WriteStrAttr(fid, "description", std::string(desc));
   }
-  // Output schema version (N-B). v1 = legacy x-prefixed dataset names
-  // (nH/Lambda_*/Gamma_*/MJ/lmbd_J); v2 = renamed (nH/Lambda_*/Gamma_*/M_J/
+  // Output schema version. v1 = legacy x-prefixed dataset names
+  // (xnH/xLmbd_*/xGam_*/xMJ/xlmbd_J); v2 = renamed (nH/Lambda_*/Gamma_*/M_J/
   // lambda_J). Post-processing tools branch on this attribute.
   H5WriteIntAttr(fid, "schema_version", 2);
   H5WriteStrAttr(fid, "cr_tag", cr_tag);
@@ -533,15 +575,15 @@ void RunCollapse(
   }
   y[AppSp::Gr] = yGr;  // Gr (neutral grain)
 
-  // Grain surface depletion reservoirs (elements locked in grains initially)
-  double yCs = XC * (1.0 - c_gas_frac);
-  double yOs = XO * (1.0 - o_gas_frac);
-  double yMgs = XMg * (1.0 - mg_gas_frac);
+  // Metals locked in the dust initially.  The library releases them as the grains
+  // evaporate (solve/grain_evaporation.h).
+  y[AppSp::C_s] = XC * (1.0 - c_gas_frac);
+  y[AppSp::O_s] = XO * (1.0 - o_gas_frac);
+  y[AppSp::Mg_s] = XMg * (1.0 - mg_gas_frac);
 #ifndef ARCHE_METAL_MINIMAL
-  double yKs = XKa;  // K / Na reservoirs are absent from the compact network
-  double yNas = XNa;
+  y[AppSp::K_s] = XKa;  // K / Na are absent from the compact network
+  y[AppSp::Na_s] = XNa;
 #endif
-  int switch_gr = 1;  // 1 = grains present, 2 = fully evaporated
 
   // ── Thermodynamic state ───────────────────────────────────────────────────
   double rho = ((1.0 + 4.0 * abund.yHe) * kMp) * nH1;
@@ -550,8 +592,7 @@ void RunCollapse(
   double p = (1.0 + abund.yHe) * nH1 * kKB * kT1;
 
   // Free-particle sums for the EOS.  The full network adds He++ (compact has
-  // no He++ species); the += keeps the full sum byte-identical to the original
-  // left-to-right fold.
+  // no He++ species); the += continues the same left-to-right fold.
   double mu_denom = y[AppSp::H] + y[AppSp::H2] + y[AppSp::e] + y[AppSp::Hp] +
                     y[AppSp::He] + y[AppSp::Hep];
   double mono =
@@ -567,13 +608,21 @@ void RunCollapse(
   double e = kKB * T_K / ((gamma - 1.0) * mu * kMp);
 
   double T_gr_K = T_rad;
-  double rho_old = rho;
-  double T_gr_old = T_gr_K;
+  // Grain volume at the initial grain temperature, relative to T -> 0: the start of
+  // the running minimum the evaporation follows.
+  y[AppSp::Gr_v] =
+      arche::detail::vol_gr(rho, T_gr_K) / arche::detail::vol_gr(rho, 0.0);
 
   // ── Chemistry parameters ──────────────────────────────────────────────────
   arche::ChemParams params{};
   params.T_rad = T_rad;
   params.zeta = zeta0;
+  params.saha_nonthermal_tol = SahaNonthermalTol();
+  params.use_saha = UseSaha();
+  params.saha_threshold_nH = SahaThresholdNH();
+  params.rtol = TolFromEnv("METAL_RTOL", params.rtol);
+  params.atol = TolFromEnv("METAL_ATOL", params.atol);
+  params.rtol_T = TolFromEnv("METAL_RTOL_T", params.rtol_T);
   params.Z_metal = Z_metal;
   params.T_gr_K = T_gr_K;
   params.T_cr_desorp = t_cr_desorp;
@@ -583,10 +632,8 @@ void RunCollapse(
   double dt = 1.0e-1;
   double t_chem = 1.0e-1;
   double t_cool = 0.0;
-  double k_gr = 0.0;
-  double k_gas = 0.0;
-  double tau_cnt = 0.0;
-  double esc_cnt = 1.0;
+  double tau_cnt =
+      0.0;  // continuum depth of the last step's end state (output)
 
   // Column densities
   double Nc_H = 0.0;
@@ -636,10 +683,6 @@ void RunCollapse(
   // uses is the point (see arche_api.h).
   const int cons_rows = AppTableNInvariants(tbl);
   for (int it = 1; it <= max_iter; ++it) {
-    // Save state from previous step for grain evaporation ratio
-    rho_old = rho;
-    T_gr_old = T_gr_K;
-
     if (has_fret_tab)
       collapse_driver::update_fret(fret_idx, f_ret, nH, fret_nH, fret_val);
 
@@ -671,13 +714,6 @@ void RunCollapse(
     Nc_H2O = y[AppSp::H2O] * nH * lsh_H2O;
     Nc_OH = y[AppSp::OH] * nH * lsh_OH;
 
-    // ── Continuum optical depth ───────────────────────────────────────────
-    tau_cnt = (k_gr + k_gas) * rho * lmbd_J;
-    if (tau_cnt > 1.0)
-      esc_cnt = 1.0 / (tau_cnt * tau_cnt);
-    else
-      esc_cnt = 1.0;
-
     // ── Build shielding environment ───────────────────────────────────────
     arche::ChemShielding shield;
     const double zeta_r_short = sra_rate * 7.6e-19;
@@ -697,8 +733,9 @@ void RunCollapse(
     shield.Nc_CII = Nc_CII;
     shield.Nc_CI = Nc_CI;
     shield.Nc_OI = Nc_OI;
-    shield.tau_cnt = tau_cnt;
-    shield.esc_cnt = esc_cnt;
+    // The continuum depth (and with it the grain temperature) is resolved inside
+    // chem_full_step from this column and the opacities of each state it evaluates.
+    shield.cnt_column = rho * lmbd_J;
     shield.J_LW21 = jlw21;
 #ifdef ARCHE_XRAY
     {
@@ -739,9 +776,8 @@ void RunCollapse(
     // Grain temperature is now returned; feed it back as the next step's
     // warm-start seed and keep the local copy for diagnostics/output.
     params.T_gr_K = rates.T_gr_K;
+    tau_cnt = rates.tau_cnt;
     T_gr_K = params.T_gr_K;
-    k_gr = rates.k_gr;
-    k_gas = rates.k_gas;
 
     const double Lambda_line = rates.Lambda_line;
     const double Lambda_gr = rates.Lambda_gr;
@@ -756,115 +792,6 @@ void RunCollapse(
 
     double MJ, B_cr;
     collapse_driver::compute_diagnostics(rho, lmbd_J, MJ, B_cr);
-
-    // ── Grain evaporation ─────────────────────────────────────────────────
-    // Above the silicate vaporization temperature the depleted metals are
-    // released back into the gas phase, in proportion to the decreased
-    // fraction of the silicate dust [Nakauchi, Omukai & Susa 2021, MNRAS 502,
-    // 3394, p.3397 sec.2; Finocchi & Gail 1997].  The depleted set is
-    // C (72%), O (46%), Mg (98%), Na and K (100%); C and O are released as
-    // neutral atoms (their ionization potentials are 11.3 / 13.6 eV), Mg as
-    // the neutral too since the network re-ionizes it thermally.
-    if (switch_gr == 1) {
-      double T_ice, T_vo, T_ro, T_tr, T_ir, T_pyr, T_ol;
-      arche::detail::vaptemp(rho, T_ice, T_vo, T_ro, T_tr, T_ir, T_pyr, T_ol);
-
-      double vol_cur = arche::detail::vol_gr(rho, T_gr_K);
-      double vol_old = arche::detail::vol_gr(rho_old, T_gr_old);
-
-      if (vol_cur < 1.0e-60) {
-        // Complete evaporation: release all grain charge and the locked-in
-        // metals.  The compact network has no K / Na (and no Gr2+), so its net
-        // grain charge goes to the electrons directly and K / Na are absent
-        // from the released set.
-#ifdef ARCHE_METAL_MINIMAL
-        double del_yp = y[AppSp::Grp];                         // Gr+
-        double del_ym = y[AppSp::Grm] + 2.0 * y[AppSp::Gr2m];  // Gr- + 2*Gr2-
-        y[AppSp::e] += (del_ym - del_yp);  // net grain charge -> electrons
-        y[AppSp::Mg] += yMgs;              // Mg neutral released
-        y[AppSp::C] += yCs;                // C neutral released
-        y[AppSp::O] += yOs;                // O neutral released
-        yMgs = 0.0;
-        yCs = 0.0;
-        yOs = 0.0;
-        y[AppSp::Gr] = 0.0;
-        y[AppSp::Grp] = 0.0;
-        y[AppSp::Grm] = 0.0;
-        y[AppSp::Gr2m] = 0.0;
-#else
-        double del_yp = y[64] + 2.0 * y[65];  // Gr+ + 2*Gr2+
-        double del_ym = y[66] + 2.0 * y[67];  // Gr- + 2*Gr2-
-        if (del_ym >= del_yp) {
-          y[2] += (del_ym - del_yp);  // e-
-        } else {
-          y[58] += (del_yp - del_ym);  // K+
-          y[57] -= (del_yp - del_ym);  // K (neutral)
-        }
-        y[57] += yKs;        // K neutral released
-        y[59] += yNas;       // Na neutral released
-        y[61] += yMgs;       // Mg neutral released
-        y[AppSp::C] += yCs;  // C neutral released
-        y[AppSp::O] += yOs;  // O neutral released
-        yKs = 0.0;
-        yNas = 0.0;
-        yMgs = 0.0;
-        yCs = 0.0;
-        yOs = 0.0;
-        y[63] = 0.0;
-        y[64] = 0.0;
-        y[65] = 0.0;
-        y[66] = 0.0;
-        y[67] = 0.0;
-#endif
-        switch_gr = 2;
-
-      } else {
-        double gr_frac = (vol_old > 0.0) ? vol_cur / vol_old : 1.0;
-
-        if (T_K >= 0.975 * T_pyr) {
-          // Partial evaporation of grain charges and locked-in metals.
-#ifdef ARCHE_METAL_MINIMAL
-          double del_yp = y[AppSp::Grp] * (1.0 - gr_frac);
-          double del_ym =
-              (y[AppSp::Grm] + 2.0 * y[AppSp::Gr2m]) * (1.0 - gr_frac);
-          y[AppSp::e] += (del_ym - del_yp);
-          y[AppSp::Mg] += yMgs * (1.0 - gr_frac);
-          y[AppSp::C] += yCs * (1.0 - gr_frac);
-          y[AppSp::O] += yOs * (1.0 - gr_frac);
-          yCs *= gr_frac;
-          yOs *= gr_frac;
-          yMgs *= gr_frac;
-          y[AppSp::Grp] *= gr_frac;
-          y[AppSp::Grm] *= gr_frac;
-          y[AppSp::Gr2m] *= gr_frac;
-#else
-          double del_yp = (y[64] + 2.0 * y[65]) * (1.0 - gr_frac);
-          double del_ym = (y[66] + 2.0 * y[67]) * (1.0 - gr_frac);
-          if (del_ym >= del_yp) {
-            y[2] += (del_ym - del_yp);
-          } else {
-            y[58] += (del_yp - del_ym);
-            y[57] -= (del_yp - del_ym);
-          }
-          y[57] += yKs * (1.0 - gr_frac);
-          y[59] += yNas * (1.0 - gr_frac);
-          y[61] += yMgs * (1.0 - gr_frac);
-          y[AppSp::C] += yCs * (1.0 - gr_frac);
-          y[AppSp::O] += yOs * (1.0 - gr_frac);
-          yCs *= gr_frac;
-          yOs *= gr_frac;
-          yKs *= gr_frac;
-          yNas *= gr_frac;
-          yMgs *= gr_frac;
-          y[64] *= gr_frac;
-          y[65] *= gr_frac;
-          y[66] *= gr_frac;
-          y[67] *= gr_frac;
-#endif
-        }
-        y[AppSp::Gr] *= gr_frac;  // Gr neutral scales with grain volume
-      }
-    }
 
     // ── Charge accounting ─────────────────────────────────────────────────
     double y_plus = AppChargePlus(y);

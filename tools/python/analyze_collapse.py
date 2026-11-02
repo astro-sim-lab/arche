@@ -72,7 +72,7 @@ YR    = 3.156e7    # s
 # I/O helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Output-schema compatibility (N-B). schema_version >= 2 uses the renamed
+# Output-schema compatibility. schema_version >= 2 uses the renamed
 # dataset names (nH / Lambda_* / Gamma_* / M_J / lambda_J); legacy v1 files use
 # the x-prefixed names. This map lets the tool read either: v1 keys are aliased
 # to their v2 names on load, so the rest of the tool uses v2 names uniformly.

@@ -202,11 +202,9 @@ struct ReactionTable {
 
   // ── Linear invariants of the network (solve/conservation.h) ───────────
   // Per-species element counts and charge — a basis of the LEFT NULL SPACE of
-  // the stoichiometric matrix, but deliberately NOT an orthonormal one.  An
-  // orthonormalised basis of the same space was implemented and measured, and
-  // rejected because it raised cond(C W C^T) from ~1 to 2.4e8 and made the Li
-  // residual 1000x worse (see solve/conservation.h, "WHY THE ROWS ARE ELEMENT
-  // COUNTS").  Stored row-major, n_invariants rows of N_sp.
+  // the stoichiometric matrix, but deliberately NOT an orthonormal one (see
+  // solve/conservation.h, "WHY THE ROWS ARE ELEMENT COUNTS").  Stored row-major,
+  // n_invariants rows of N_sp.
   // Every row v satisfies v^T S = 0 and
   // therefore d(v·y)/dt = 0 exactly, so v·y is conserved by the kinetics
   // whatever the rate coefficients.  Derived from `reactions` above by
@@ -255,10 +253,9 @@ struct ReactionTable {
   int n_saha = 0;
 
   // ── Optional full-network back-reference (compact metal Minimal model) ──
-  // The compact metal network gathers its rate coefficients from a full
-  // metal_grain coefficient run (strategy-1 rate path) and its compact-Saha
-  // partition functions from a full PF evaluation; both read this PF-loaded
-  // full table.  Held as shared_ptr so the table stays copyable; null for every
+  // The compact metal network evaluates its kept reactions' rate laws and its
+  // species' partition functions in the full network's layout (rate_kernel.h
+  // metal_base_rates, MinimalMetalSaha); both read this PF-loaded full table.  Held as shared_ptr so the table stays copyable; null for every
   // other model, including the full metal table itself.
   std::shared_ptr<const ReactionTable<metal_grain::N_sp, metal_grain::N_react>>
       aux_full_metal{};
@@ -273,19 +270,21 @@ using MetalGrainTable = ReactionTable<metal_grain::N_sp, metal_grain::N_react>;
 //
 // Loads the partition-function numerical tables from an HDF5 file into an
 // already-topology-initialised ReactionTable.  Reaction topology (reactions,
-// saha, grain_surface, mass) is no longer read from HDF5 — it is the
+// saha, grain_surface, mass) is not read from HDF5 — it is the
 // hand-maintained C++ network in models/<model>/reactions.h, applied by that
 // model's init_topology().  Only the partition-function tables remain data,
 // because they are genuine numerical spectra (hundreds of (T, Q(T)) points).
 //
 //   /partition_functions/sp{i}/{T,pf}        (i = 0-based species index)
 //
-// The file's n_species attribute is still checked against the compile-time
-// N_sp as a guard against pairing a table file with the wrong network.
+// The file's n_species attribute is still checked against the species the file
+// covers (n_species_file, by default the compile-time N_sp) as a guard against
+// pairing a table file with the wrong network.  A network may carry species
+// after those (the metal_grain dust reservoirs); they have no table.
 // ---------------------------------------------------------------------------
 template <int N_sp, int N_react>
 void load_pf_tables_h5(ReactionTable<N_sp, N_react>& tbl,
-                       const std::string& h5_path) {
+                       const std::string& h5_path, int n_species_file = N_sp) {
   using h5utils::H5FileGuard;
   using h5utils::H5GroupExists;
   using h5utils::H5GroupGuard;
@@ -297,19 +296,20 @@ void load_pf_tables_h5(ReactionTable<N_sp, N_react>& tbl,
   if (fid < 0)
     throw std::runtime_error("Cannot open HDF5 chem table: " + h5_path);
 
-  // Sanity: n_species must match the compile-time N_sp.
+  // Sanity: n_species must match the species the file covers.
   int n_sp_file = H5ReadIntAttr(fid, "n_species");
-  if (n_sp_file != N_sp) {
+  if (n_sp_file != n_species_file || n_species_file > N_sp) {
     throw std::runtime_error(
         "HDF5 chem table: n_species=" + std::to_string(n_sp_file) + " in " +
-        h5_path + " does not match compile-time N_sp=" + std::to_string(N_sp));
+        h5_path + " does not match the expected " +
+        std::to_string(n_species_file));
   }
 
   // ── partition_functions ───────────────────────────────────────────────
   if (H5GroupExists(fid, "partition_functions")) {
     H5GroupGuard pfg{H5Gopen2(fid, "partition_functions", H5P_DEFAULT)};
-    // Iterate over child groups named "spK" with K in 0..N_sp-1.
-    for (int isp = 0; isp < N_sp; ++isp) {
+    // Iterate over child groups named "spK" with K in 0..n_species_file-1.
+    for (int isp = 0; isp < n_species_file; ++isp) {
       std::string subname = "sp" + std::to_string(isp);
       if (!H5GroupExists(pfg, subname)) continue;
       H5GroupGuard sg{H5Gopen2(pfg, subname.c_str(), H5P_DEFAULT)};

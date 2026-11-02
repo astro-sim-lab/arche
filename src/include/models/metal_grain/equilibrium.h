@@ -5,13 +5,14 @@
 // ---------------------------------------------------------------------------
 // equilibrium.h — equichem_metal helper for the metal_grain Saha branch
 //
-// detail::equichem_metal receives Z_metal (not available to the generic
-// equichem<N_sp, N_react> signature) and performs a 4D Newton–Raphson on
-// (y_e, y_H, y_C, y_O), filling y[0..62].
+// detail::equichem_metal performs a 4D Newton–Raphson on (y_e, y_H, y_C, y_O),
+// filling y[0..62] under the input cell's own gas-phase element budgets.
 // ---------------------------------------------------------------------------
 #include <algorithm>
+#include <cmath>
+#include <limits>
 
-#include "core/newton.h"  // newton_solve, GaussjLinSolve, NewtonOpts
+#include "core/saha_newton.h"  // saha_newton_log
 #include "kinetics/rates.h"
 #include "models/metal_grain/minimal.h"  // metal_grain_minimal::Sp / MinimalTable
 #include "models/metal_grain/partition_function_metal.h"  // eval_metal_partition_functions
@@ -23,37 +24,64 @@ namespace arche {
 //
 // Saha equilibrium for the metal_grain network.
 // 4D Newton–Raphson on (y_e, y_H, y_C, y_O).
-// Fills y[0..62]; leaves y[63..88] unchanged.
+// Fills y[0..62]; leaves y[63..94] unchanged.
 // ─────────────────────────────────────────────────────────────────────────────
 namespace detail {
 
+// metal_saha_solve — the 4D (y_e, y_H, y_C, y_O) Saha root through core/saha_newton.h,
+// from the cell's own abundances, then, if that fails, from a start that depends on T
+// and n_H and the cell's budgets only (y_H from the H/H2 balance with ions neglected,
+// y_H + 2 K_H2 y_H^2 = y_H,tot, y_e from H+, D+ and Li+, y_C and y_O at their element
+// budgets). If both fail the active unknowns become NaN,
+// so the integrator's composition check (saha_at) rejects the step. The log-space
+// iteration keeps y_C and y_O positive: a floored step max(x + d, 1e-30) can pin them at
+// the floor, and the full network then breaks the C or O budget by up to 20 orders below
+// ~2800 K.
+template <class Residual>
+void metal_saha_solve(std::array<double, 4>& x,
+                      const std::array<bool, 4>& active, double K_Hp,
+                      double K_H2, double ion_sum_per_ye, double yH_tot,
+                      double XC, double XO, Residual&& residual) {
+  if (saha_newton_log<4>(x, active, residual)) return;
+  const double h = 2.0 * yH_tot / (1.0 + std::sqrt(1.0 + 8.0 * K_H2 * yH_tot));
+  std::array<double, 4> x2 = {std::sqrt(K_Hp * h + ion_sum_per_ye), h,
+                              active[2] ? XC : x[2], active[3] ? XO : x[3]};
+  if (saha_newton_log<4>(x2, active, residual)) {
+    x = x2;
+    return;
+  }
+  for (int j = 0; j < 4; ++j)
+    if (active[j]) x[j] = std::numeric_limits<double>::quiet_NaN();
+}
+
+//
+// The element budgets and the charge target are the input cell's own, over the
+// gas-phase species this solver writes (0..62): the grain charge states, the
+// ice mantles (63..88) and the dust reservoirs (89..94) are left as they are, so
+// their elements and charge stay
+// where they were and the step conserves every element and the total charge. The
+// solar composition scaled by Z_metal holds only where nothing has moved the
+// gas-phase budgets -- not with ice or grain charge present, nor after advection
+// in 3D.
 inline void equichem_metal(
-    double nH, double T_K, double Z_metal,
-    std::array<double, metal_grain::N_sp>& y,
+    double nH, double T_K, std::array<double, metal_grain::N_sp>& y,
     const ReactionTable<metal_grain::N_sp, metal_grain::N_react>& tbl) {
   using Sp = metal_grain::Sp;  // y[Sp::H] etc. (Sp::name == species index)
   constexpr double k_B = phys::k_B;
   constexpr double h_P = phys::h_P;
   constexpr double pi = phys::pi;
-  // Solar reference abundances
-  constexpr double yHe_s = abundance_ref::yHe;
-  constexpr double yD_s = abundance_ref::yD;
-  constexpr double yLi_s = abundance_ref::yLi;
-  constexpr double yC_s = abundance_ref::yC;
-  constexpr double yO_s = abundance_ref::yO;
-  constexpr double yNa_s = abundance_ref::yNa;
-  constexpr double yMg_s = abundance_ref::yMg;
-  constexpr double yK_s = abundance_ref::yK;
-  constexpr double eps_it = numerics::eps_it_metal;
-
-  const double yHe = yHe_s;
-  const double yD = yD_s;
-  const double yLi = yLi_s;
-  const double XC = yC_s * Z_metal;
-  const double XO = yO_s * Z_metal;
-  const double XKa = yK_s * Z_metal;
-  const double XNa = yNa_s * Z_metal;
-  const double XMg = yMg_s * Z_metal;
+  // Gas-phase budgets of the elements with a closed-form sequence (H, C and O,
+  // the Newton unknowns, are summed below with their conservation residuals).
+  const double yHe = y[Sp::He] + y[Sp::Hep] + y[Sp::Hepp] + y[Sp::HeHp];
+  const double yD = y[Sp::D] + y[Sp::HD] + y[Sp::Dp] + y[Sp::HDp] + y[Sp::Dm];
+  const double yLi = y[Sp::Li] + y[Sp::LiH] + y[Sp::Lip] + y[Sp::Lim] +
+                     y[Sp::LiHp] + y[Sp::Lipp] + y[Sp::Lippp];
+  const double XKa = y[Sp::K] + y[Sp::Kp];
+  const double XNa = y[Sp::Na] + y[Sp::Nap];
+  const double XMg = y[Sp::Mg] + y[Sp::Mgp];
+  // Charge the untouched grains carry; the gas phase balances it.
+  const double q_grain =
+      y[Sp::Grp] + 2.0 * y[Sp::Gr2p] - y[Sp::Grm] - 2.0 * y[Sp::Gr2m];
 
   // ── Partition functions (0-based species + 3 sentinel slots) ─────────────
   std::array<double, metal_grain::N_sp + 3> pf{};
@@ -201,17 +229,17 @@ inline void equichem_metal(
 
   // ── Conservation residuals ────────────────────────────────────────────────
   auto F_cha_fn = [&](const auto& yy) -> double {
-    return yy[Sp::Hp] + yy[Sp::H2p] + yy[Sp::H3p] + yy[Sp::Hep] + yy[Sp::HeHp] +
-           yy[Sp::Dp] + yy[Sp::HDp] + yy[Sp::Cp] + yy[Sp::C2p] + yy[Sp::CHp] +
-           yy[Sp::CH2p] + yy[Sp::CH3p] + yy[Sp::CH4p] + yy[Sp::CH5p] +
-           yy[Sp::Op] + yy[Sp::O2p] + yy[Sp::OHp] + yy[Sp::COp] + yy[Sp::H2Op] +
-           yy[Sp::HCOp] + yy[Sp::O2Hp] + yy[Sp::H3Op] + yy[Sp::H2COp] +
-           yy[Sp::H2COHp] + yy[Sp::Lip] + yy[Sp::LiHp] + yy[Sp::Kp] +
-           yy[Sp::Nap] + yy[Sp::Mgp] + 2.0 * (yy[Sp::Hepp] + yy[Sp::Lipp]) +
-           3.0 * yy[Sp::Lippp] -
+    return q_grain + yy[Sp::Hp] + yy[Sp::H2p] + yy[Sp::H3p] + yy[Sp::Hep] +
+           yy[Sp::HeHp] + yy[Sp::Dp] + yy[Sp::HDp] + yy[Sp::Cp] + yy[Sp::C2p] +
+           yy[Sp::CHp] + yy[Sp::CH2p] + yy[Sp::CH3p] + yy[Sp::CH4p] +
+           yy[Sp::CH5p] + yy[Sp::Op] + yy[Sp::O2p] + yy[Sp::OHp] + yy[Sp::COp] +
+           yy[Sp::H2Op] + yy[Sp::HCOp] + yy[Sp::O2Hp] + yy[Sp::H3Op] +
+           yy[Sp::H2COp] + yy[Sp::H2COHp] + yy[Sp::Lip] + yy[Sp::LiHp] +
+           yy[Sp::Kp] + yy[Sp::Nap] + yy[Sp::Mgp] +
+           2.0 * (yy[Sp::Hepp] + yy[Sp::Lipp]) + 3.0 * yy[Sp::Lippp] -
            (yy[Sp::e] + yy[Sp::Hm] + yy[Sp::Dm] + yy[Sp::Lim]);
   };
-  auto F_hyd_fn = [&](const auto& yy) -> double {
+  auto H_content = [&](const auto& yy) -> double {
     return yy[Sp::H] + yy[Sp::Hp] + yy[Sp::Hm] + yy[Sp::HeHp] + yy[Sp::HD] +
            yy[Sp::HDp] + yy[Sp::CH] + yy[Sp::CHp] + yy[Sp::OH] + yy[Sp::HCO] +
            yy[Sp::O2H] + yy[Sp::OHp] + yy[Sp::HCOp] + yy[Sp::O2Hp] +
@@ -221,25 +249,32 @@ inline void equichem_metal(
                   yy[Sp::H2COp]) +
            3.0 * (yy[Sp::H3p] + yy[Sp::CH3] + yy[Sp::CH3p] + yy[Sp::H3Op] +
                   yy[Sp::H2COHp]) +
-           4.0 * (yy[Sp::CH4] + yy[Sp::CH4p]) + 5.0 * yy[Sp::CH5p] - 1.0;
+           4.0 * (yy[Sp::CH4] + yy[Sp::CH4p]) + 5.0 * yy[Sp::CH5p];
   };
-  auto F_car_fn = [&](const auto& yy) -> double {
+  auto C_content = [&](const auto& yy) -> double {
     return yy[Sp::C] + yy[Sp::CH] + yy[Sp::CH2] + yy[Sp::CH3] + yy[Sp::CH4] +
            yy[Sp::Cp] + yy[Sp::CHp] + yy[Sp::CH2p] + yy[Sp::CH3p] +
            yy[Sp::CH4p] + yy[Sp::CH5p] + yy[Sp::CO] + yy[Sp::HCO] +
            yy[Sp::CO2] + yy[Sp::H2CO] + yy[Sp::COp] + yy[Sp::HCOp] +
            yy[Sp::H2COp] + yy[Sp::HOCOp] + yy[Sp::H2COHp] +
-           2.0 * (yy[Sp::C2] + yy[Sp::C2p]) - XC;
+           2.0 * (yy[Sp::C2] + yy[Sp::C2p]);
   };
-  auto F_oxy_fn = [&](const auto& yy) -> double {
+  auto O_content = [&](const auto& yy) -> double {
     return yy[Sp::O] + yy[Sp::OH] + yy[Sp::CO] + yy[Sp::H2O] + yy[Sp::HCO] +
            yy[Sp::H2CO] + yy[Sp::Op] + yy[Sp::OHp] + yy[Sp::COp] +
            yy[Sp::H2Op] + yy[Sp::HCOp] + yy[Sp::H3Op] + yy[Sp::H2COp] +
            yy[Sp::H2COHp] +
            2.0 * (yy[Sp::O2] + yy[Sp::O2H] + yy[Sp::CO2] + yy[Sp::H2O2] +
-                  yy[Sp::O2p] + yy[Sp::O2Hp] + yy[Sp::HOCOp]) -
-           XO;
+                  yy[Sp::O2p] + yy[Sp::O2Hp] + yy[Sp::HOCOp]);
   };
+  const double yH_tot = H_content(y);
+  const double XC = C_content(y);
+  const double XO = O_content(y);
+  auto F_hyd_fn = [&](const auto& yy) -> double {
+    return H_content(yy) - yH_tot;
+  };
+  auto F_car_fn = [&](const auto& yy) -> double { return C_content(yy) - XC; };
+  auto F_oxy_fn = [&](const auto& yy) -> double { return O_content(yy) - XO; };
 
   // ── Initial guess from current y ──────────────────────────────────────────
   double y_e = y[Sp::e];
@@ -248,8 +283,8 @@ inline void equichem_metal(
   double y_O = y[Sp::O];
   if (y_e <= 0.0) y_e = 1.0e-20;
   if (y_H <= 0.0) y_H = 1.0e-20;
-  if (y_C <= 0.0) y_C = (Z_metal > 0.0) ? 1.0e-20 : 0.0;
-  if (y_O <= 0.0) y_O = (Z_metal > 0.0) ? 1.0e-20 : 0.0;
+  if (y_C <= 0.0) y_C = (XC > 0.0) ? 1.0e-20 : 0.0;
+  if (y_O <= 0.0) y_O = (XO > 0.0) ? 1.0e-20 : 0.0;
 
   // Scratch array for the per-iteration residual/Jacobian evaluations; the
   // real output `y` is written only by the final fill_y below.
@@ -261,22 +296,15 @@ inline void equichem_metal(
   // 4D Newton–Raphson on (y_e, y_H, y_C, y_O): charge / hydrogen / carbon /
   // oxygen conservation.  Carbon and oxygen columns are frozen (inactive) when
   // the element is absent (XC / XO == 0).
-  newton_solve<4, GaussjLinSolve<4>>(
-      x, active,
+  metal_saha_solve(
+      x, active, K_Hp, K_H2, K_Dp * yD + K_Lip * yLi, yH_tot, XC, XO,
       [&](const std::array<double, 4>& xx, std::array<double, 4>& fv) {
         fill_y(ytmp, xx[0], xx[1], xx[2], xx[3]);
         fv[0] = F_cha_fn(ytmp);
         fv[1] = F_hyd_fn(ytmp);
         fv[2] = F_car_fn(ytmp);
         fv[3] = F_oxy_fn(ytmp);
-      },
-      [&](std::array<double, 4>& xx, const std::array<double, 4>& d) {
-        xx[0] = std::max(xx[0] + d[0], 1.0e-30);
-        xx[1] = std::max(xx[1] + d[1], 1.0e-30);
-        if (XC > 0.0) xx[2] = std::max(xx[2] + d[2], 1.0e-30);
-        if (XO > 0.0) xx[3] = std::max(xx[3] + d[3], 1.0e-30);
-      },
-      NewtonOpts{eps_it, 100, 1.0e-10});
+      });
   y_e = x[0];
   y_H = x[1];
   y_C = x[2];
@@ -294,11 +322,12 @@ inline void equichem_metal(
 // ─────────────────────────────────────────────────────────────────────────────
 // detail::equichem_metal_minimal
 //
-// Compact (40-species) Saha equilibrium for the metal_grain Minimal network.
+// Compact (44-species) Saha equilibrium for the metal_grain Minimal network.
 // The same 4D Newton–Raphson on (y_e, y_H, y_C, y_O) as equichem_metal, reduced
 // to the 31 gas-phase species the compact network carries (indices 0..30:
-// H..Mg+); the grain charge states and ice-mantle species (compact 31..39) are
-// left unchanged, mirroring how the full solver leaves the grain block 63..88.
+// H..Mg+); the grain charge states, ice-mantle species and dust reservoirs
+// (compact 31..43) are left unchanged, mirroring how the full solver leaves
+// 63..94.
 //
 // The equilibrium constants come from the compact Saha sub-table
 // (kMetalMinimalSahaKeep, 23 reactions renumbered 1..23), so Keqb is indexed by
@@ -308,26 +337,25 @@ inline void equichem_metal(
 // residuals, so no removed species (He++, the higher C/O ions, LiH, K, Na, …)
 // is ever referenced in a denominator.
 //
-// The partition functions are supplied by the caller (gathered from a full
-// metal_grain PF evaluation onto the compact species) — see MinimalMetalSaha.
+// The partition functions are supplied by the caller (the compact species'
+// partition functions, evaluated in the full layout) — see MinimalMetalSaha.
 // ─────────────────────────────────────────────────────────────────────────────
 inline void equichem_metal_minimal(
-    double nH, double T_K, double Z_metal,
-    std::array<double, metal_grain_minimal::N_sp>& y,
+    double nH, double T_K, std::array<double, metal_grain_minimal::N_sp>& y,
     const metal_grain_minimal::MinimalTable& tbl,
     const std::array<double, metal_grain_minimal::N_sp + 3>& pf) {
   using Sp = metal_grain_minimal::Sp;
   constexpr double k_B = phys::k_B;
   constexpr double h_P = phys::h_P;
   constexpr double pi = phys::pi;
-  constexpr double eps_it = numerics::eps_it_metal;
 
-  const double yHe = abundance_ref::yHe;
-  const double yD = abundance_ref::yD;
-  const double yLi = abundance_ref::yLi;
-  const double XC = abundance_ref::yC * Z_metal;
-  const double XO = abundance_ref::yO * Z_metal;
-  const double XMg = abundance_ref::yMg * Z_metal;
+  // The input cell's gas-phase budgets and the charge of its untouched grains, as
+  // in equichem_metal.
+  const double yHe = y[Sp::He] + y[Sp::Hep];
+  const double yD = y[Sp::D] + y[Sp::HD] + y[Sp::Dp];
+  const double yLi = y[Sp::Li] + y[Sp::Lip];
+  const double XMg = y[Sp::Mg] + y[Sp::Mgp];
+  const double q_grain = y[Sp::Grp] - y[Sp::Grm] - 2.0 * y[Sp::Gr2m];
 
   // ── Equilibrium constants from the compact Saha sub-table.  Keqb[i] is the
   //    equilibrium constant of compact Saha reaction i+1 (keep-set position i);
@@ -431,26 +459,35 @@ inline void equichem_metal_minimal(
 
   // ── Conservation residuals over the compact species only ───────────────────
   auto F_cha_fn = [&](const auto& yy) -> double {
-    return yy[Sp::Hp] + yy[Sp::H2p] + yy[Sp::H3p] + yy[Sp::Hep] + yy[Sp::Dp] +
-           yy[Sp::Cp] + yy[Sp::Op] + yy[Sp::OHp] + yy[Sp::H2Op] + yy[Sp::HCOp] +
-           yy[Sp::H3Op] + yy[Sp::Lip] + yy[Sp::Mgp] - (yy[Sp::e] + yy[Sp::Hm]);
+    return q_grain + yy[Sp::Hp] + yy[Sp::H2p] + yy[Sp::H3p] + yy[Sp::Hep] +
+           yy[Sp::Dp] + yy[Sp::Cp] + yy[Sp::Op] + yy[Sp::OHp] + yy[Sp::H2Op] +
+           yy[Sp::HCOp] + yy[Sp::H3Op] + yy[Sp::Lip] + yy[Sp::Mgp] -
+           (yy[Sp::e] + yy[Sp::Hm]);
   };
-  auto F_hyd_fn = [&](const auto& yy) -> double {
+  auto H_content = [&](const auto& yy) -> double {
     return yy[Sp::H] + yy[Sp::Hp] + yy[Sp::Hm] + yy[Sp::HD] + yy[Sp::CH] +
            yy[Sp::OH] + yy[Sp::HCO] + yy[Sp::OHp] + yy[Sp::HCOp] +
            2.0 * (yy[Sp::H2] + yy[Sp::H2p] + yy[Sp::CH2] + yy[Sp::H2O] +
                   yy[Sp::H2Op]) +
-           3.0 * (yy[Sp::H3p] + yy[Sp::H3Op]) - 1.0;
+           3.0 * (yy[Sp::H3p] + yy[Sp::H3Op]);
   };
-  auto F_car_fn = [&](const auto& yy) -> double {
+  auto C_content = [&](const auto& yy) -> double {
     return yy[Sp::C] + yy[Sp::CH] + yy[Sp::CH2] + yy[Sp::Cp] + yy[Sp::CO] +
-           yy[Sp::HCO] + yy[Sp::HCOp] - XC;
+           yy[Sp::HCO] + yy[Sp::HCOp];
   };
-  auto F_oxy_fn = [&](const auto& yy) -> double {
+  auto O_content = [&](const auto& yy) -> double {
     return yy[Sp::O] + yy[Sp::OH] + yy[Sp::CO] + yy[Sp::H2O] + yy[Sp::HCO] +
            yy[Sp::Op] + yy[Sp::OHp] + yy[Sp::H2Op] + yy[Sp::HCOp] +
-           yy[Sp::H3Op] + 2.0 * yy[Sp::O2] - XO;
+           yy[Sp::H3Op] + 2.0 * yy[Sp::O2];
   };
+  const double yH_tot = H_content(y);
+  const double XC = C_content(y);
+  const double XO = O_content(y);
+  auto F_hyd_fn = [&](const auto& yy) -> double {
+    return H_content(yy) - yH_tot;
+  };
+  auto F_car_fn = [&](const auto& yy) -> double { return C_content(yy) - XC; };
+  auto F_oxy_fn = [&](const auto& yy) -> double { return O_content(yy) - XO; };
 
   // ── Initial guess from current y ──────────────────────────────────────────
   double y_e = y[Sp::e];
@@ -459,30 +496,23 @@ inline void equichem_metal_minimal(
   double y_O = y[Sp::O];
   if (y_e <= 0.0) y_e = 1.0e-20;
   if (y_H <= 0.0) y_H = 1.0e-20;
-  if (y_C <= 0.0) y_C = (Z_metal > 0.0) ? 1.0e-20 : 0.0;
-  if (y_O <= 0.0) y_O = (Z_metal > 0.0) ? 1.0e-20 : 0.0;
+  if (y_C <= 0.0) y_C = (XC > 0.0) ? 1.0e-20 : 0.0;
+  if (y_O <= 0.0) y_O = (XO > 0.0) ? 1.0e-20 : 0.0;
 
   std::array<double, metal_grain_minimal::N_sp> ytmp{};
   std::array<double, 4> x = {y_e, y_H, y_C, y_O};
   const std::array<bool, 4> active = {true, true, (y_C > 0.0 && XC > 0.0),
                                       (y_O > 0.0 && XO > 0.0)};
 
-  newton_solve<4, GaussjLinSolve<4>>(
-      x, active,
+  metal_saha_solve(
+      x, active, K_Hp, K_H2, K_Dp * yD + K_Lip * yLi, yH_tot, XC, XO,
       [&](const std::array<double, 4>& xx, std::array<double, 4>& fv) {
         fill_y(ytmp, xx[0], xx[1], xx[2], xx[3]);
         fv[0] = F_cha_fn(ytmp);
         fv[1] = F_hyd_fn(ytmp);
         fv[2] = F_car_fn(ytmp);
         fv[3] = F_oxy_fn(ytmp);
-      },
-      [&](std::array<double, 4>& xx, const std::array<double, 4>& d) {
-        xx[0] = std::max(xx[0] + d[0], 1.0e-30);
-        xx[1] = std::max(xx[1] + d[1], 1.0e-30);
-        if (XC > 0.0) xx[2] = std::max(xx[2] + d[2], 1.0e-30);
-        if (XO > 0.0) xx[3] = std::max(xx[3] + d[3], 1.0e-30);
-      },
-      NewtonOpts{eps_it, 100, 1.0e-10});
+      });
 
   // ── Final fill at the converged root — writes the real output ──────────────
   fill_y(y, x[0], x[1], x[2], x[3]);
@@ -491,17 +521,17 @@ inline void equichem_metal_minimal(
 }  // namespace detail
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Saha-equilibrium policy for the metal_grain model.  chemreact() selects this
-// via Model::SahaPolicy (forward-declared in models/metal_grain/traits.h) and
-// calls solve() in the high-density branch; it forwards params.Z_metal to the
-// 4D equichem_metal.
+// Saha-equilibrium policy for the metal_grain model.  The integrator selects
+// this via Model::SahaPolicy (forward-declared in models/metal_grain/traits.h)
+// and calls solve() in the high-density regime.  The element budgets come from y
+// itself, so the 4D equichem_metal needs nothing from params.
 // ─────────────────────────────────────────────────────────────────────────────
 struct MetalSaha {
   template <int N_sp, int N_react>
-  static void solve(double nH, double T_K, const ChemParams& params,
+  static void solve(double nH, double T_K, const ChemParams& /*params*/,
                     std::array<double, N_sp>& y,
                     const ReactionTable<N_sp, N_react>& tbl) {
-    detail::equichem_metal(nH, T_K, params.Z_metal, y, tbl);
+    detail::equichem_metal(nH, T_K, y, tbl);
   }
 };
 
@@ -509,26 +539,25 @@ struct MetalSaha {
 // Saha-equilibrium policy for the compact metal_grain Minimal model.
 //
 // The compact 4D Newton (detail::equichem_metal_minimal) needs the partition
-// functions of the 40 compact species.  The metal PF evaluator is hardcoded to
-// the full 89-species layout, so the compact PFs are gathered from a full
-// evaluation onto the compact species (by canonical identity), using the full
-// PF-loaded table the runtime owns alongside the compact table.  That table is
+// functions of the 44 compact species.  The metal PF evaluator is written in the
+// full 95-species layout; it evaluates only the compact species
+// (kKeptFullSpecies) on the full PF-loaded table the runtime owns alongside the
+// compact table, and they are copied onto the compact species by canonical
+// identity.  That table is
 // supplied when the compact metal runtime is constructed (table/PF phase);
 // until then this policy is guarded so it cannot be silently instantiated with
 // no PF source.
 // ─────────────────────────────────────────────────────────────────────────────
 struct MinimalMetalSaha {
   template <int N_sp, int N_react>
-  static void solve(double nH, double T_K, const ChemParams& params,
+  static void solve(double nH, double T_K, const ChemParams& /*params*/,
                     std::array<double, N_sp>& y,
                     const ReactionTable<N_sp, N_react>& tbl) {
-    // The metal PF evaluator is hardcoded to the full 89-species layout, so the
-    // compact PFs are gathered from a full evaluation (on the runtime-owned
-    // full table) onto the compact species by canonical identity.
     const auto& full = *tbl.aux_full_metal;
     std::array<double, metal_grain::N_sp + 3> pf_full{};
     eval_metal_partition_functions<metal_grain::N_sp, metal_grain::N_react>(
-        T_K, full, pf_full);
+        T_K, full, pf_full,
+        [](int i) { return metal_grain_minimal::kKeptFullSpecies[i]; });
 
     std::array<double, metal_grain_minimal::N_sp + 3> pf{};
     pf.fill(1.0);
@@ -536,7 +565,7 @@ struct MinimalMetalSaha {
       pf[i] = pf_full[metal_grain::Species::local(
           metal_grain_minimal::Species::canonical(i))];
 
-    detail::equichem_metal_minimal(nH, T_K, params.Z_metal, y, tbl, pf);
+    detail::equichem_metal_minimal(nH, T_K, y, tbl, pf);
   }
 };
 

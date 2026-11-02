@@ -7,9 +7,9 @@ This document contains setup and detailed execution guidance moved out of `READM
 | Component | Requirement |
 |---|---|
 | C++ compiler | C++17 or later (GCC >= 9 / Clang >= 9) |
-| CMake | >= 3.15 |
+| CMake | >= 3.18 |
 | Eigen3 | Required (CMake package: `Eigen3`) |
-| HDF5 (C library) | Required by `prim_collapse` and `metal_collapse` |
+| HDF5 (C library) | Required (`libarche` reads its reaction tables from HDF5) |
 | Python | >= 3.11 |
 | Python packages | `numpy >= 2.0`, `h5py`; `matplotlib` required for plotting |
 
@@ -27,7 +27,12 @@ cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=icpx -DCMAKE
 cmake --build build -j$(nproc)
 ```
 
-Binaries are generated under `build/src/apps/...`.
+Binaries are generated under `build/src/apps/...`: the collapse applications
+(`prim_collapse`, `arche_collapse_prim_minimal`, `metal_collapse`,
+`arche_collapse_metal_minimal`), the standalone chemistry demos (`prim_chem`,
+`metal_chem`), and `magnetic_reynolds`, which evaluates the Ohmic and ambipolar
+diffusivities and the magnetic Reynolds number along a collapse output (see
+`docs/parameters.md` and `docs/magnetic_resistivity.md`).
 
 ## Python setup
 
@@ -54,7 +59,7 @@ bash run_collapse.sh --prim-zeta0 1e-17 --metal-zeta0 1e-17 --metal-z-metal 1e-3
 
 Both networks use the full model by default. Add `--minimal` to run the compact
 primordial network (`arche_collapse_prim_minimal`), and/or `--metal-minimal` to
-run the compact metal-grain network (`Nakauchi2021_Minimal`, 40 species, the
+run the compact metal-grain network (`Nakauchi2021_Minimal`, 44 species, the
 `arche_collapse_metal_minimal` binary). The minimal variants take the same
 CLI/env parameters as their full counterparts and reuse the same HDF5 tables;
 their output stem gains a `_min` tag (with a non-`_min` symlink alias for the
@@ -101,3 +106,4 @@ examples, live in **[`integration/`](../integration/README.md)**.
 - Resample tool reference: `tools/resample_collapse.md`
 - API reference: `docs/api_reference.md`
 - Output schema: `docs/output_schema.md`
+- Changes between releases: `docs/release_notes.md`

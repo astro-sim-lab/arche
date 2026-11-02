@@ -2,15 +2,11 @@
 // Licensed under the MIT found in the
 // https://github.com/astro-sim-lab/arche/blob/main/LICENSE
 #pragma once
-// chemreact.h — implicit chemistry ODE integrator
+// chemreact.h — model terms of the chemistry step shared by the integrator
 //
-// Provides the implicit chemistry solver chemreact (Newton–Raphson), the
-// generic Newton driver newton_solve, and the dense linear solve gaussj.  The
-// high-density Saha-equilibrium initial guess is dispatched through
-// Model::SahaPolicy, defined in the per-model equilibrium.h headers.
-//
-// Optional Eigen support: define ARCHE_USE_EIGEN before including, or
-// add -DARCHE_USE_EIGEN to the compiler flags.
+// compute_chemistry_cooling (the chemistry heat term of the energy equation) and
+// saha_nonthermal_shift (the test of whether the Saha regime may be used with
+// non-thermal ionisation). The step itself is solved by solve/integrator.h.
 
 #include <algorithm>
 #include <array>
@@ -28,49 +24,37 @@
 
 namespace arche {
 
-// The high-density Saha branch of chemreact() dispatches to Model::SahaPolicy
-// (FullPrimSaha / MinimalSaha / MetalSaha), forward-declared in the per-model
-// traits.h and defined in the per-model equilibrium.h.  The including
-// translation unit (chemistry.h) pulls in those definitions so the template
-// instantiations resolve.
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Error-handling policy
-//
-// Library layer (solve/, kinetics/, models/, cooling/ headers):
-//   - Invalid caller input (e.g. unset T_rad) → throw std::invalid_argument.
-//   - A diverged NR step (non-finite / unphysically large y) is reported
-//   through
-//     ChemSolveResult::converged, never via std::exit.
-//   - gaussj_solve returns false on a singular system (interface honesty) and
-//     zeroes the update; a transient singular Jacobian is absorbed as a
-//     recoverable step (like the catastrophic / in-loop guards) and is NOT
-//     escalated to converged==false — doing so regressed CR0 metal collapses.
-// Application layer (collapse_*.h, apps/*/main.cc):
-//   - May call std::exit, but only after writing a diagnostic to stderr.
-// ─────────────────────────────────────────────────────────────────────────────
-
-// The model-independent linear/Newton solvers (gaussj_solve, NewtonOpts,
-// CramerSolve2, GaussjLinSolve, newton_solve) live in core/newton.h so the
-// per-model equilibrium solvers can share them without a solve↔models cycle.
-
 // ─────────────────────────────────────────────────────────────────────────────
 // compute_chemistry_cooling<Model> — chemistry heating/cooling rate [erg g^-1
 // s^-1]
 //   Handles both zero_metal (primordial) and metal_grain networks via
 //   if constexpr on Model traits.
 //
-//   Plain `inline` (not force-inlined): benchmarking showed no wall-clock
-//   benefit from __attribute__((always_inline)) on the rate/cooling kernels
-//   (forced inlining was marginally slower, within noise), so inlining is left
-//   to the compiler.
+//   Plain `inline` (not force-inlined): inlining is left to the compiler.
 // ─────────────────────────────────────────────────────────────────────────────
+// The factors of the chemistry heat that depend on T alone (the temperature
+// dependence of the H2 critical density, used below nH = 1e13 cm^-3), so that
+// evaluations at one T can share them.
+struct ChemCoolingTerms {
+  double exp_H = 0.0, exp_H2 = 0.0, sqrt_T = 0.0;
+};
+
+inline ChemCoolingTerms chemistry_cooling_terms(double nH, double T_K) {
+  ChemCoolingTerms t;
+  if (nH < 1.0e13) {
+    t.exp_H = std::exp(-std::pow(400.0 / T_K, 2.0));
+    t.exp_H2 = std::exp(-12000.0 / (T_K + 1200.0));
+    t.sqrt_T = std::sqrt(T_K);
+  }
+  return t;
+}
+
 template <class Model>
 inline void compute_chemistry_cooling(
     const std::array<double, Model::N_sp>& y,
     const std::array<double, Model::N_sp>& dy,
-    const std::array<double, 2 * Model::N_react>& k_rxn, double nH, double T_K,
-    double dt, double& Lambda_chem) {
+    const std::array<double, 2 * Model::N_react>& k_rxn, double nH, double dt,
+    const ChemCoolingTerms& tt, double& Lambda_chem) {
   using Sp = typename Model::Sp;  // model-specific species names: y[Sp::H] etc.
   constexpr int N_react = Model::N_react;
   constexpr double yHe = abundance_ref::yHe;
@@ -81,8 +65,8 @@ inline void compute_chemistry_cooling(
   // He+/He++ ionization-energy terms are a composable contribution: models that
   // carry He+ provide dyHep (has_he_ion), models that carry He++ provide dyHepp
   // (has_he_pp); a model without them leaves the term zero and never names
-  // Sp::Hep / Sp::Hepp.  The additive energy sum below is left intact so the
-  // full models stay bit-for-bit (both flags true ⇒ same assignments, in order).
+  // Sp::Hep / Sp::Hepp.  With both flags true the assignments below are the full
+  // models' additive energy sum, in order.
   double dyHep = 0.0;
   double dyHepp = 0.0;
   if constexpr (Model::cooling::has_he_ion) {
@@ -93,18 +77,16 @@ inline void compute_chemistry_cooling(
   }
 
   if (nH < 1.0e13) {
-    double denom_cr = 1.6 * y[Sp::H] * std::exp(-std::pow(400.0 / T_K, 2.0)) +
-                      1.4 * y[Sp::H2] * std::exp(-12000.0 / (T_K + 1200.0));
-    double n_cr =
-        (denom_cr > 1.0e-30) ? 1.0e6 / std::sqrt(T_K) / denom_cr : 1.0e50;
+    double denom_cr = 1.6 * y[Sp::H] * tt.exp_H + 1.4 * y[Sp::H2] * tt.exp_H2;
+    double n_cr = (denom_cr > 1.0e-30) ? 1.0e6 / tt.sqrt_T / denom_cr : 1.0e50;
     double crit = 1.0 / (1.0 + n_cr / nH);
 
     // k_rxn[] indices are addressed through the model's cooling rate-index map
     // so a compact model (different reaction numbering) reaches the same
-    // reactions; for the full models these equal the shared rxn:: ids, so the
-    // expressions stay bit-for-bit.  The H2–He dissociation channel is a
-    // composable term (a model without it sets has_h2_he_cool = false); each
-    // accumulation preserves the original left-to-right order.
+    // reactions; for the full models these equal the shared rxn:: ids.  The
+    // H2–He dissociation channel is a composable term (a model without it sets
+    // has_h2_he_cool = false); each accumulation runs left to right in the order
+    // written.
     using cidx = typename Model::cooling::rate_idx;
     double rtHm = k_rxn[cidx::Hm_H_to_H2_e] * y[Sp::Hm] * y[Sp::H];
     double rtH2p = k_rxn[cidx::H2p_H_to_H2_Hp] * y[Sp::H2p] * y[Sp::H];
@@ -123,8 +105,8 @@ inline void compute_chemistry_cooling(
     if constexpr (Model::has_grain) {
       // Grain H2 formation cooling.  The surface channels (physisorbed /
       // chemisorbed H) need H_p / H_c, which the compact network drops, so they
-      // are composable (gh2::has_surface); the full expression is kept verbatim
-      // when present so the full model stays bit-for-bit.
+      // are composable (gh2::has_surface); with them the full expression is
+      // evaluated.
       using gh2 = typename Model::cooling::grain_H2;
       double rtgrain;
       if constexpr (gh2::has_surface)
@@ -146,8 +128,7 @@ inline void compute_chemistry_cooling(
     }
 
     // H+ recombination minus the CR-producer losses; the CR term is composable
-    // (a CR-free model omits it).  Each branch is the model's full expression
-    // verbatim, so the additive energy sum stays bit-for-bit.
+    // (a CR-free model omits it).  Each branch is the model's full expression.
     if constexpr (Model::cooling::has_cr_loss) {
       using Hp = typename Model::cooling::Hp_producers;
       // The second H2 CR channel (CR-induced photon) is composable: a model
@@ -190,294 +171,70 @@ inline void compute_chemistry_cooling(
   Lambda_chem =
       ((2.18e-11 * dyHp + 3.94e-11 * dyHep + 12.66e-11 * dyHepp) / dt + L_H2) /
       ((1.0 + 4.0 * yHe) * m_p);
-  if (!std::isfinite(Lambda_chem)) Lambda_chem = 0.0;
+  // Preserve non-finite output so the acceptance layer rejects it; never
+  // silently turn invalid chemical heating into a zero contribution.
+}
+
+template <class Model>
+inline void compute_chemistry_cooling(
+    const std::array<double, Model::N_sp>& y,
+    const std::array<double, Model::N_sp>& dy,
+    const std::array<double, 2 * Model::N_react>& k_rxn, double nH, double T_K,
+    double dt, double& Lambda_chem) {
+  compute_chemistry_cooling<Model>(
+      y, dy, k_rxn, nH, dt, chemistry_cooling_terms(nH, T_K), Lambda_chem);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ChemSolveResult — scalar results of chemreact / chemcool.
-//   y (abundances) and var (rate cache) are updated in place via reference
-//   parameters; these computed scalars are returned by value.
-// ─────────────────────────────────────────────────────────────────────────────
-struct ChemSolveResult {
-  double mu = 0.0;
-  double gamma = 0.0;
-  double Lambda_chem = 0.0;  // chemistry cooling [erg g^-1 s^-1]
-  bool converged = false;
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// chemreact<Model> — one timestep NR chemistry solver
-//   Solves dy/dt = r_f(y) implicitly, optionally via Saha for nH > 1e18.
-//   Updates y and var in place; returns {mu, gamma, Lambda_chem, converged}.
-// ─────────────────────────────────────────────────────────────────────────────
+// saha_nonthermal_shift — how far non-thermal ionization moves y_e off Saha
+//
+// At the Saha state y_S the network is evaluated twice: with the caller's zeta /
+// zeta_X, and with both set to zero. Their difference dr is the non-thermal
+// production alone (the difference, not r itself, because the network's thermal rates
+// and the Saha partition functions need not balance exactly). Treated as a perturbation,
+// it shifts the electron abundance by dy_e = dr_e / |J_ee| in steady state, where
+// |J_ee| y_e is the electrons' gross destruction (recombination) at y_S. The returned
+// value is |dy_e| / y_e. For two-body electron-ion recombination the exact linear shift
+// is half of this, so the estimate errs on the side of keeping the Newton solve.
 template <class Model>
-ChemSolveResult chemreact(double nH, double T_K,
-                          std::array<double, Model::N_sp>& y, double dt,
-                          std::array<double, 2 * Model::N_react>& var,
-                          const ReactionTable<Model::N_sp, Model::N_react>& tbl,
-                          const ChemParams& params) {
+double saha_nonthermal_shift(
+    double nH, double T_K, const std::array<double, Model::N_sp>& y_S,
+    const ReactionTable<Model::N_sp, Model::N_react>& tbl,
+    const ChemParams& params,
+    const std::array<double, 2 * Model::N_react>& var) {
   constexpr int N_sp = Model::N_sp;
   constexpr int N_react = Model::N_react;
-  using Sp = typename Model::Sp;  // model-specific species names: y[Sp::H] etc.
-  constexpr double eps_y = numerics::eps_y;
-  constexpr double nH_eq = numerics::nH_eq;
-
-  // Scalar results returned by value; y and var are updated in place.
-  double mu = 0.0, gamma = 0.0, Lambda_chem = 0.0;
-  bool converged = false;
-
-  std::array<double, N_sp> y_init = y;
-  std::array<double, N_sp> dy{};
-  dy.fill(0.0);
-  std::array<double, N_sp> ddy{};
-  std::array<double, N_sp> r_f{};
-  std::array<double, N_sp * N_sp> dr_fdy{};
-  std::array<double, N_sp * N_sp> A_mat{};
-  std::array<double, 2 * N_react> k_rxn{};
-
-  // Non-thermal ionization (CR + X-ray) maintains ye above pure Saha thermal
-  // equilibrium at high density.  Skip the Saha branch when either CR or
-  // X-ray ionization is active so the NR solver remains active.
-  const bool use_nr =
-      (nH <= nH_eq) || (params.zeta > 0.0) || (params.zeta_X > 0.0);
-  if (use_nr) {
-    // ─── Non-Equilibrium (low-density) NR solver ───────────────────────
-    ChemParams p_loc = params;
-    p_loc.H = y[Sp::H];
-    p_loc.H2 = 2.0 * y[Sp::H2];
-    p_loc.He = y[Sp::He];
-
-    if constexpr (Model::has_uv_shield) {
-      p_loc.J_H2 = y[Sp::H2_p];
-      p_loc.J_H2O = y[Sp::H2O_p];
-      p_loc.J_tot = y[Sp::H_c] + y[Sp::D_c];
-    }
-
-    // Compute reaction rate coefficients
-    const auto eos = thermo::make_eos_composition<Model>(y);
-    mu = thermo::mean_molecular_weight(eos);
-    compute_base_rates<Model>(nH, T_K, mu, p_loc, tbl, k_rxn);
-
-    // Catastrophic-detection guard
-    const bool use_cat_detect = [&]() {
-      if constexpr (Model::catastrophic_detect_always) {
-        return true;
-      } else {
-        return (nH < 4.0e22);
-      }
-    }();
-    double err_fnc_prev = 0.0;
-    for (int itr = 0; itr < Model::nr_max_iter; ++itr) {
-      r_f.fill(0.0);
-      dr_fdy.fill(0.0);
-
-      compute_rates<Model>(k_rxn, nH, y, tbl, r_f, dr_fdy, var);
-
-      // Build A = I - dt * J  (J = dr_fdy, row-major)
-      for (int isp = 0; isp < N_sp; ++isp)
-        for (int jsp = 0; jsp < N_sp; ++jsp)
-          A_mat[isp * N_sp + jsp] =
-              (isp == jsp ? 1.0 : 0.0) - dt * dr_fdy[isp * N_sp + jsp];
-
-      // rhs: ddy = r_f*dt - dy
-      double err_fnc = 0.0;
-      for (int isp = 0; isp < N_sp; ++isp) {
-        ddy[isp] = r_f[isp] * dt - dy[isp];
-        err_fnc += std::abs(ddy[isp]);
-      }
-
-      if (use_cat_detect && itr > 0 &&
-          err_fnc > 1.0e4 * std::max(err_fnc_prev, 1.0e-12)) {
-        y = y_init;
-        dy.fill(0.0);
-        break;
-      }
-      err_fnc_prev = err_fnc;
-
-      // Solve A * ddy = ddy  (in-place).  A singular Jacobian is absorbed
-      // by gaussj_solve (it zeroes the update and returns false); the step
-      // is treated as a recoverable transient — consistent with the
-      // catastrophic / in-loop guards — so the bool return is not escalated
-      // to a convergence failure here.
-      gaussj_solve<N_sp>(A_mat, ddy);
-
-      // Update abundances
-      double err_y = 0.0;
-      for (int isp = 0; isp < N_sp; ++isp) {
-        if (y[isp] + ddy[isp] < 0.0) {
-          ddy[isp] = -0.1 * y[isp];
-          err_y += 1.0;
-        }
-        dy[isp] += ddy[isp];
-        y[isp] += ddy[isp];
-        err_y += std::abs(ddy[isp]);
-      }
-
-      // In-loop divergence guard (metal only): non-finite or unphysically large
-      if constexpr (Model::has_in_loop_divergence_guard) {
-        bool nr_ok_guard = true;
-        for (int isp = 0; isp < N_sp && nr_ok_guard; ++isp)
-          if (!std::isfinite(y[isp]) || y[isp] > 1.0e50) nr_ok_guard = false;
-        if (!nr_ok_guard) {
-          y = y_init;
-          dy.fill(0.0);
-          break;
-        }
-      }
-
-      if (err_y <= eps_y && err_fnc <= 1.0e-4) break;
-    }
-    // Convergence notification — reported regardless of build options so the
-    // caller is never left unaware of a diverged step.
-    converged = true;
-    for (int isp = 0; isp < N_sp && converged; ++isp)
-      if (!std::isfinite(y[isp]) || y[isp] > 1.0e50) converged = false;
-#ifdef ARCHE_SUBCYCLE
-    // Subcycle builds roll the diverged step back so the caller can retry at
-    // a smaller dt; non-subcycle numerics are intentionally left untouched.
-    if (!converged) y = y_init;
-#endif
-  } else {
-    // ─── Saha equilibrium (high-density) ───────────────────────────────
-    // Each model names its Saha-equilibrium solver via Model::SahaPolicy
-    // (FullPrimSaha / MinimalSaha / MetalSaha), defined in the per-model
-    // equilibrium.h.  equichem_dy_count bounds the species the Saha branch
-    // writes (the full network for primordial, y[0..62] for metal_grain).
-    Model::SahaPolicy::template solve<N_sp, N_react>(nH, T_K, params, y, tbl);
-    for (int i = 0; i < Model::equichem_dy_count; ++i) dy[i] = y[i] - y_init[i];
-    converged = true;
+  using Sp = typename Model::Sp;
+  ChemParams p = params;
+  p.H = y_S[Sp::H];
+  p.H2 = 2.0 * y_S[Sp::H2];
+  p.He = y_S[Sp::He];
+  if constexpr (Model::has_uv_shield) {
+    p.J_H2 = y_S[Sp::H2_p];
+    p.J_H2O = y_S[Sp::H2O_p];
+    p.J_tot = y_S[Sp::H_c] + y_S[Sp::D_c];
   }
-
-  // Update thermodynamic variables
-  const auto eos = thermo::make_eos_composition<Model>(y);
-  mu = thermo::mean_molecular_weight(eos);
-  gamma = thermo::adiabatic_index(eos, T_K);
-
-  // ── Chemistry cooling Lambda_chem ──────────────────────────────────────────
-  compute_chemistry_cooling<Model>(y, dy, k_rxn, nH, T_K, dt, Lambda_chem);
-
-  return ChemSolveResult{mu, gamma, Lambda_chem, converged};
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// chemcool<Model> — secant method wrapper for temperature self-consistent
-// integration
-//   Finds T* such that T_K - T* - (γ-1)*μ*mp*ΛΔt/kB = 0,
-//   then updates y in place and returns {mu, gamma, Lambda_chem, converged} at
-//   T*.
-//
-//   secant_skip_high_density controls the early-exit condition:
-//     primordial:   skip when  nH  > 1e16  AND  T <= 1650 K
-//     metal_grain:  skip when  nH <= 1e16  AND  T <= 1650 K
-// ─────────────────────────────────────────────────────────────────────────────
-template <class Model>
-ChemSolveResult chemcool(double nH, double Tp,
-                         std::array<double, Model::N_sp>& y, double dt,
-                         std::array<double, 2 * Model::N_react>& var,
-                         const ReactionTable<Model::N_sp, Model::N_react>& tbl,
-                         const ChemParams& params) {
-  constexpr int N_sp = Model::N_sp;
-  constexpr double m_p = phys::m_p;
-  constexpr double k_B = phys::k_B;
-  constexpr int maxit = 100;
-
-  // Residual using updated gamma/mu from chemreact output
-  auto func = [&](double t, double g, double mu, double Lc) -> double {
-    return Tp - t - (g - 1.0) * mu * m_p * Lc * dt / k_B;
-  };
-
-  // First evaluation at Tp1 = Tp
-  double Tp1 = Tp;
-  std::array<double, N_sp> ytmp = y;
-  double mu1 = 0.0, gamma1 = 0.0, Lambdach1 = 0.0;
-  // Optimistic; flipped to false if any inner chemreact fails to converge.
-  bool converged = true;
-  ChemSolveResult r = chemreact<Model>(nH, Tp1, ytmp, dt, var, tbl, params);
-  mu1 = r.mu;
-  gamma1 = r.gamma;
-  Lambdach1 = r.Lambda_chem;
-  if (!r.converged) {
-    converged = false;
-#ifdef ARCHE_SUBCYCLE
-    return ChemSolveResult{mu1, gamma1, Lambdach1, false};  // subcycle: bail
-#endif
+  ChemParams p0 = p;
+  p0.zeta = 0.0;
+  p0.zeta_X = 0.0;
+  const auto eos = thermo::make_eos_composition<Model>(y_S);
+  const double mu = thermo::mean_molecular_weight(eos);
+  std::array<double, 2 * N_react> k{}, k0{};
+  compute_base_rates<Model>(nH, T_K, mu, p, tbl, k);
+  compute_base_rates<Model>(nH, T_K, mu, p0, tbl, k0);
+  std::array<double, N_sp> r{}, r0{};
+  std::array<double, N_sp * N_sp> J{};
+  auto v = var, v0 = var;  // compute_rates writes its cache; keep the caller's
+  compute_rates<Model>(k, nH, y_S, tbl, r, J, v);
+  compute_rhs<Model>(k0, nH, y_S, tbl, r0, v0);
+  const double ye = y_S[Sp::e];
+  const double loss = std::abs(J[Sp::e * N_sp + Sp::e]) * ye;
+  const double dr = std::abs(r[Sp::e] - r0[Sp::e]);
+  if (!(ye > 0.0) || !(loss > 0.0) || !std::isfinite(dr)) {
+    return std::numeric_limits<
+        double>::infinity();  // cannot judge: keep Newton
   }
-  double fL = func(Tp1, gamma1, mu1, Lambdach1);
-
-  // Skip secant: condition depends on model
-  {
-    bool skip;
-    if constexpr (Model::secant_skip_high_density) {
-      skip = (nH > 1.0e16 && Tp <= 1.65e3);
-    } else {
-      skip = (nH <= 1.0e16 && Tp <= 1.65e3);
-    }
-    if (skip) {
-      y = ytmp;  // converged already reflects the single chemreact above
-      return ChemSolveResult{mu1, gamma1, Lambdach1, converged};
-    }
-  }
-
-  // Second evaluation at Tp2 = 0.999*Tp1
-  double Tp2 = 0.999 * Tp1;
-  ytmp = y;
-  double mu2 = 0.0, gamma2 = 0.0, Lambdach2 = 0.0;
-  r = chemreact<Model>(nH, Tp2, ytmp, dt, var, tbl, params);
-  mu2 = r.mu;
-  gamma2 = r.gamma;
-  Lambdach2 = r.Lambda_chem;
-  if (!r.converged) {
-    converged = false;
-#ifdef ARCHE_SUBCYCLE
-    return ChemSolveResult{mu2, gamma2, Lambdach2, false};
-#endif
-  }
-  double f = func(Tp2, gamma2, mu2, Lambdach2);
-
-  // Ensure |fL| >= |f|  (larger residual at TpL)
-  double TpL, Tpsec;
-  if (std::abs(fL) < std::abs(f)) {
-    TpL = Tp2;
-    Tpsec = Tp1;
-    std::swap(fL, f);
-  } else {
-    TpL = Tp1;
-    Tpsec = Tp2;
-  }
-
-  // Secant iterations
-  for (int i = 0; i < maxit; ++i) {
-    // Guard against f ≈ fL which causes division by zero → NaN
-    double df = f - fL;
-    if (std::abs(df) < 1.0e-30 * (std::abs(f) + std::abs(fL) + 1.0e-30)) break;
-    double dTp = (TpL - Tpsec) * f / df;
-    TpL = Tpsec;
-    fL = f;
-    Tpsec += dTp;
-    // Physical temperature bounds: prevent secant divergence from
-    // propagating NaN cooling rates into the main loop
-    if (!std::isfinite(Tpsec) || Tpsec < 1.0) Tpsec = 1.0;
-    if (Tpsec > 1.0e8) Tpsec = 1.0e8;
-
-    ytmp = y;
-    r = chemreact<Model>(nH, Tpsec, ytmp, dt, var, tbl, params);
-    mu1 = r.mu;
-    gamma1 = r.gamma;
-    Lambdach1 = r.Lambda_chem;
-    if (!r.converged) {
-      converged = false;
-#ifdef ARCHE_SUBCYCLE
-      return ChemSolveResult{mu1, gamma1, Lambdach1, false};
-#endif
-    }
-    f = func(Tpsec, gamma1, mu1, Lambdach1);
-
-    if (std::abs(f / Tpsec) <= 1.0e-7) break;
-  }
-
-  y = ytmp;
-  // converged is true here unless a non-subcycle build saw a diverged step.
-  return ChemSolveResult{mu1, gamma1, Lambdach1, converged};
+  return dr / loss;
 }
 
 }  // namespace arche

@@ -1,6 +1,7 @@
 # Environment Variable Reference
 
-For direct binary execution (`prim_collapse`, `metal_collapse`, `prim_chem`, `metal_chem`),
+For direct binary execution (`prim_collapse`, `metal_collapse`, `prim_chem`, `metal_chem`,
+`magnetic_reynolds`),
 parameters are set as environment variables before invoking a binary.
 Unset (or empty) optional variables fall back to their listed defaults.
 
@@ -37,11 +38,19 @@ Precedence in `run_collapse.sh` is:
 | `PRIM_DT_FACTOR` | no | `1e-3` | Timestep factor for regular steps (> 0) |
 | `PRIM_DT_FACTOR_INIT` | no | `1e-8` | Timestep factor for the first `PRIM_N_INIT_STEPS` steps (> 0) |
 | `PRIM_N_INIT_STEPS` | no | `10` | Number of initial short-timestep steps (integer, ≥ 0) |
+| `PRIM_DT_FACTOR_CHEM` | no | `1e50` | Timestep fraction of the chemistry timescale: dt = min(`PRIM_DT_FACTOR`·min(t_cool, t_eff), `PRIM_DT_FACTOR_CHEM`·t_chem).  The default `1e50` disables the t_chem limit |
+| `PRIM_RTOL` | no | `1e-4` | Relative tolerance of the error-controlled chemistry integrator (`ChemParams::rtol`) |
+| `PRIM_ATOL` | no | `1e-14` | Absolute tolerance per H nucleus, the same for every species (`ChemParams::atol`) |
+| `PRIM_RTOL_T` | no | `1e-4` | Relative tolerance of the temperature (`ChemParams::rtol_T`) |
+| `PRIM_USE_SAHA` | no | on | `0` solves the kinetic network at every density; any other value (or unset) takes the Saha regime above `PRIM_SAHA_NH` (`ChemParams::use_saha`) |
+| `PRIM_SAHA_NH` | no | `1e18` | Density [cm⁻³] above which the Saha regime is used (`ChemParams::saha_threshold_nH`).  The Saha solvers are built for nH > 1e18 cm⁻³; a lower value is outside that range |
+| `PRIM_SAHA_NT_TOL` | no | `1e-3` | With ζ > 0 (or ζ_X > 0), the Saha regime is used only where the non-thermal ionization shifts y(e⁻) at the Saha state by at most this fraction; `0` = never with non-thermal ionization (`ChemParams::saha_nonthermal_tol`) |
+| `PRIM_BENCH` | no | off | Any value other than `0` writes the wall time of every `chem_full_step` call to `<PRIM_OUTDIR>/bench_CR<cr_tag>[_min].csv` (columns `step,nH_cm3,wall_us`) |
 | `PRIM_XNH_STOP` | no | `1e23` | Stop threshold for H number density [cm⁻³] (> 0) |
 | `PRIM_CR_ATTEN_COL_DENS` | no | `96.0` | CR attenuation column density scale [g cm⁻²] (> 0) |
 | `PRIM_CHEM_TABLE` | no | compile-time `PRIM_CHEM_TABLE` | Path to primordial.h5 chemistry table |
-| `PRIM_JLW21` | no | `0.0` | Lyman-Werner intensity J₂₁ [10⁻²¹ erg/s/cm²/Hz/sr].  `0.0` = no LW field.  Activates H₂/HD photodissociation and H⁻ photodetachment (operator-split after chemistry).  H₂ self-shielding uses Wolcott-Green & Haiman (2019) eq. 7–8 with density/temperature-dependent exponent α(n,T); HD uses WG2011 functional form (α = 2); H⁻ has no self-shielding |
-| `PRIM_ZETA_X` | no | `0.0` | X-ray primary HI photoionization rate ζ_X [s⁻¹].  `0.0` = no X-ray field.  **Requires binary compiled with `-DARCHE_XRAY=ON`** (default: OFF).  Beer-Lambert shielding applied: ζ_X_eff = ζ_X · exp(−τ_X), τ_X = (y_HI + 2·y_H₂)·n_H·λ_J·σ_HI(E_X) [Inayoshi & Omukai 2011].  **⚠️ Valid range: ζ_X < 1e-18 s⁻¹.  At ζ_X ≥ 1e-18 s⁻¹, NR instability causes yH₂ collapse and T runaway near nH ~ 1e10 cm⁻³, resulting in unphysical evolution (issue #39 sub-issue A).** |
+| `PRIM_JLW21` | no | `0.0` | Lyman-Werner intensity J₂₁ [10⁻²¹ erg/s/cm²/Hz/sr].  `0.0` = no LW field.  Activates H₂/HD photodissociation and H⁻ photodetachment (first-order sinks in the implicit chemistry step).  H₂ self-shielding uses Wolcott-Green & Haiman (2019) eq. 7–8 with density/temperature-dependent exponent α(n,T), fitted for T ≤ 8000 K; above 8000 K α keeps its 8000 K value (α ≥ 0.13, so f_sh ≤ 1); HD uses WG2011 functional form (α = 2); H⁻ has no self-shielding |
+| `PRIM_ZETA_X` | no | `0.0` | X-ray primary HI photoionization rate ζ_X [s⁻¹].  `0.0` = no X-ray field.  **Requires binary compiled with `-DARCHE_XRAY=ON`** (default: OFF).  Beer-Lambert shielding applied: ζ_X_eff = ζ_X · exp(−τ_X), τ_X = (y_HI + 2·y_H₂)·n_H·λ_J·σ_HI(E_X) [Inayoshi & Omukai 2011].  **⚠️ Valid range: ζ_X < 1e-18 s⁻¹.  At ζ_X ≥ 1e-18 s⁻¹, yH₂ collapses and T runs away near nH ~ 1e10 cm⁻³, an unphysical evolution.** |
 | `PRIM_E_X_EV` | no | `300.0` | Representative X-ray photon energy E_X [eV] used for cross-section σ_HI(E_X) in Beer-Lambert shielding (> 13.6 eV).  Effective only when `PRIM_ZETA_X` > 0 and binary compiled with `-DARCHE_XRAY=ON` |
 | `PRIM_REDSHIFT` | no | `0.0` | Cosmological redshift z.  Sets T_rad = 2.725 × (1+z) K |
 
@@ -111,18 +120,28 @@ Lines beginning with `#` are comments.  Rows must be in ascending `nH` order.
 | `METAL_DT_FACTOR` | no | `1e-3` | Timestep factor for regular steps (> 0) |
 | `METAL_DT_FACTOR_INIT` | no | `1e-8` | Timestep factor for the first `METAL_N_INIT_STEPS` steps (> 0) |
 | `METAL_N_INIT_STEPS` | no | `10` | Number of initial short-timestep steps (integer, ≥ 0) |
+| `METAL_DT_FACTOR_CHEM` | no | `1e50` | Timestep fraction of the chemistry timescale: dt = min(`METAL_DT_FACTOR`·min(t_cool, t_eff), `METAL_DT_FACTOR_CHEM`·t_chem).  The default `1e50` disables the t_chem limit |
+| `METAL_RTOL` | no | `1e-4` | Relative tolerance of the error-controlled chemistry integrator (`ChemParams::rtol`) |
+| `METAL_ATOL` | no | `1e-14` | Absolute tolerance per H nucleus, the same for every species (`ChemParams::atol`) |
+| `METAL_RTOL_T` | no | `1e-4` | Relative tolerance of the temperature (`ChemParams::rtol_T`) |
+| `METAL_USE_SAHA` | no | on | `0` solves the kinetic network at every density; any other value (or unset) takes the Saha regime above `METAL_SAHA_NH` (`ChemParams::use_saha`) |
+| `METAL_SAHA_NH` | no | `1e18` | Density [cm⁻³] above which the Saha regime is used (`ChemParams::saha_threshold_nH`).  The Saha solvers are built for nH > 1e18 cm⁻³; a lower value is outside that range |
+| `METAL_SAHA_NT_TOL` | no | `1e-3` | With ζ > 0 (or ζ_X > 0), the Saha regime is used only where the non-thermal ionization shifts y(e⁻) at the Saha state by at most this fraction; `0` = never with non-thermal ionization (`ChemParams::saha_nonthermal_tol`) |
+| `METAL_BENCH` | no | off | Any value other than `0` writes the wall time of every `chem_full_step` call to `<METAL_OUTDIR>/bench_CR<cr_tag>_Z<z_tag>.csv` (columns `step,nH_cm3,wall_us`) |
 | `METAL_XNH_STOP` | no | `1e23` | Stop threshold for H number density [cm⁻³] (> 0) |
 | `METAL_CR_ATTEN_COL_DENS` | no | `96.0` | CR attenuation column density scale [g cm⁻²] (> 0) |
 | `METAL_CR_ATTEN_SECOND_FRAC` | no | `7.6e-2` | Secondary CR attenuation fraction (≥ 0) |
 | `METAL_CR_METAL_BKGND` | no | `1.4e-22` | Metal CR floor coefficient (≥ 0) |
 | `METAL_T_CR_DES` | no | `70.0` | Effective CR desorption spike temperature [K] (advanced, > 0) |
+| `METAL_SRA_RATE` | no | `0.0` | Short-lived radionuclide ionization scaling: ζ_SRA = rate × 7.6e-19 s⁻¹ (≥ 0) |
+| `METAL_LRA_RATE` | no | `0.0` | Long-lived radionuclide ionization scaling: ζ_LRA = rate × 1.4e-22 × Z s⁻¹ (≥ 0) |
 | `METAL_C_GAS_FRAC` | no | `0.28` | Initial C gas-phase fraction ([0, 1]) |
 | `METAL_O_GAS_FRAC` | no | `0.54` | Initial O gas-phase fraction ([0, 1]) |
 | `METAL_MG_GAS_FRAC` | no | `0.02` | Initial Mg gas-phase fraction ([0, 1]) |
 | `METAL_CHEM_TABLE` | no | compile-time value | Path to metal_grain.h5 chemistry table |
 | `PRIM_CHEM_TABLE` | no | compile-time value | Path to primordial.h5 chemistry table |
-| `METAL_JLW21` | no | `0.0` | Lyman-Werner intensity J₂₁ [10⁻²¹ erg/s/cm²/Hz/sr].  `0.0` = no LW field.  Same physics as `PRIM_JLW21` (WG2019 H₂ self-shielding, WG2011 HD, no H⁻ shielding) |
-| `METAL_ZETA_X` | no | `0.0` | X-ray primary HI photoionization rate ζ_X [s⁻¹].  `0.0` = no X-ray field.  **Requires binary compiled with `-DARCHE_XRAY=ON`** (default: OFF).  Same shielding model as `PRIM_ZETA_X`.  **⚠️ High ζ_X (≥ 1e-18 s⁻¹) validity for metal model has not been verified; avoid until confirmed (issue #39 sub-issue A).** |
+| `METAL_JLW21` | no | `0.0` | Lyman-Werner intensity J₂₁ [10⁻²¹ erg/s/cm²/Hz/sr].  `0.0` = no LW field.  Same physics as `PRIM_JLW21` (WG2019 H₂ self-shielding with α held at its 8000 K value above 8000 K, WG2011 HD, no H⁻ shielding) |
+| `METAL_ZETA_X` | no | `0.0` | X-ray primary HI photoionization rate ζ_X [s⁻¹].  `0.0` = no X-ray field.  **Requires binary compiled with `-DARCHE_XRAY=ON`** (default: OFF).  Same shielding model as `PRIM_ZETA_X`.  **⚠️ High ζ_X (≥ 1e-18 s⁻¹) has not been verified for the metal model; avoid it.** |
 | `METAL_E_X_EV` | no | `300.0` | Representative X-ray photon energy E_X [eV] (> 13.6 eV).  Effective only when `METAL_ZETA_X` > 0 and binary compiled with `-DARCHE_XRAY=ON` |
 | `METAL_REDSHIFT` | no | `0.0` | Cosmological redshift z |
 
@@ -188,6 +207,8 @@ Output is written to stdout (step, t, species abundances, cooling rates).
 | `METAL_CR_ATTEN_SECOND_FRAC` | no | `7.6e-2` | Secondary CR attenuation fraction in shielding model (≥ 0) |
 | `METAL_CR_METAL_BKGND` | no | `1.4e-22` | CR metal-floor coefficient in shielding model (≥ 0) |
 | `METAL_T_CR_DES` | no | `70.0` | Effective CR desorption spike temperature [K] used in CR desorption terms (advanced, > 0) |
+| `METAL_SRA_RATE` | no | `0.0` | Short-lived radionuclide ionization scaling: ζ_SRA = rate × 7.6e-19 s⁻¹ (≥ 0) |
+| `METAL_LRA_RATE` | no | `0.0` | Long-lived radionuclide ionization scaling: ζ_LRA = rate × 1.4e-22 × Z s⁻¹ (≥ 0) |
 | `METAL_C_GAS_FRAC` | no | `0.28` | Initial C gas-phase fraction ([0,1]) |
 | `METAL_O_GAS_FRAC` | no | `0.54` | Initial O gas-phase fraction ([0,1]) |
 | `METAL_MG_GAS_FRAC` | no | `0.02` | Initial Mg gas-phase fraction ([0,1]) |
@@ -203,6 +224,39 @@ Output is written to stdout (step, t, species abundances, cooling rates).
 ```bash
 METAL_ZETA0=1e-17 METAL_Z_METAL=1e-3 METAL_XNH=1e4 \
 ./build/src/apps/chemistry_metal_grain/metal_chem
+```
+
+---
+
+## `magnetic_reynolds` — Ohmic/ambipolar diffusivities along a collapse track
+
+Reads a collapse output file and evaluates, for every output row and every field
+strength of a logarithmic grid, η_O, η_A [cm² s⁻¹] of the row's composition
+(`arche::model_resistivity`, see [`magnetic_resistivity.md`](magnetic_resistivity.md))
+and the magnetic Reynolds number at the Jeans scale
+Rm(λ_J) = v_ff λ_J / (η_O + η_A) with v_ff = λ_J / (3 t_ff).
+
+```bash
+magnetic_reynolds <collapse.h5> <output.h5>
+```
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `MAGRE_MODEL` | no | `Nakauchi2021` | Registered model that wrote the input (`Nakauchi2019`, `Nakauchi2019_Minimal`, `Nakauchi2021`, `Nakauchi2021_Minimal`).  The input's `y` column count must equal the model's species count |
+| `MAGRE_CHEM_TABLE` | no | compile-time `data/metal_grain.h5` | Reaction table of that model (`data/primordial.h5` for the primordial models) |
+| `MAGRE_LOG10B_MIN` | no | `-10` | Lowest log₁₀(B/G) of the grid |
+| `MAGRE_LOG10B_MAX` | no | `10` | Highest log₁₀(B/G) of the grid (> `MAGRE_LOG10B_MIN`) |
+| `MAGRE_NB` | no | `401` | Number of grid points (integer in [2, 1e6]) |
+
+Output datasets: `nH`, `T_K`, `rho`, `lambda_J`, `t_ff`, `B_cr` (N, copied from the
+input), `log10_B` (N_B), `eta_O` (N) [cm² s⁻¹], `eta_A` and `Rm` (N, N_B).
+
+**Example** (primordial track)
+
+```bash
+MAGRE_MODEL=Nakauchi2019 MAGRE_CHEM_TABLE=data/primordial.h5 \
+./build/src/apps/magnetic_reynolds/magnetic_reynolds \
+    results/prim/h5/collapse_CR1e-17.h5 results/prim/h5/rm_CR1e-17.h5
 ```
 
 ---
@@ -302,7 +356,7 @@ Run from the project root.
 | `--save-dir` | DIR | from config (`SAVE_DIR`, fallback `results`) | Root for figure output (`DIR/primordial/`, `DIR/metal_grain/`) |
 | `--config` | FILE | `params/default.conf` | Parameter file path |
 | `--minimal` | — | off | Run primordial with the compact minimal network (`arche_collapse_prim_minimal`).  Primordial HDF5 stem becomes `collapse_CR<...>_min...`; when launched via `run_collapse.sh`, a non-`_min` alias symlink is also created for plot/resample compatibility |
-| `--metal-minimal` | — | off | Run metal-grain with the compact minimal network (`arche_collapse_metal_minimal`, `Nakauchi2021_Minimal`, 40 species).  Metal HDF5 stem becomes `collapse_CR<...>_Z<...>..._min.h5` (the `_min` tag is appended at the end of the stem); a non-`_min` alias symlink is also created for plot/resample compatibility |
+| `--metal-minimal` | — | off | Run metal-grain with the compact minimal network (`arche_collapse_metal_minimal`, `Nakauchi2021_Minimal`, 44 species).  Metal HDF5 stem becomes `collapse_CR<...>_Z<...>..._min.h5` (the `_min` tag is appended at the end of the stem); a non-`_min` alias symlink is also created for plot/resample compatibility |
 | `--no-config` | — | — | Disable parameter file loading |
 | `--no-build` | — | — | Skip CMake build step |
 | `--no-prim` | — | — | Skip primordial collapse |

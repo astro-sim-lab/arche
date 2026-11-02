@@ -119,6 +119,47 @@
 #include "cooling/xray_secondary.h"  // xray::sigma_HI_Verner96 (ARCHE_XRAY)
 #include "core/hdf5_utils.h"
 #include "models/primordial/minimal.h"  // zero_metal_minimal::Sp / N_sp
+#include <cstdlib>
+
+// With PRIM_SAHA_NT_TOL=<x> (x > 0), the solver
+// takes the Saha regime above nH_eq even with cosmic rays when their estimated shift of
+// y_e at the Saha state is at most x (ChemParams::saha_nonthermal_tol). Unset = the
+// library default; 0 = never with zeta > 0.
+static double SahaNonthermalTol() {
+  static const double tol = [] {
+    const char* e = std::getenv("PRIM_SAHA_NT_TOL");
+    return (e != nullptr && e[0] != '\0')
+               ? std::stod(e)
+               : arche::ChemParams{}.saha_nonthermal_tol;
+  }();
+  return tol;
+}
+
+// PRIM_USE_SAHA=0 solves the kinetic network by Newton
+// at every density (ChemParams::use_saha); PRIM_SAHA_NH=<nH> moves the Saha threshold
+// (ChemParams::saha_threshold_nH, default 1e18 cm^-3).
+static bool UseSaha() {
+  static const bool on = [] {
+    const char* e = std::getenv("PRIM_USE_SAHA");
+    return !(e != nullptr && std::string(e) == "0");
+  }();
+  return on;
+}
+// PRIM_RTOL / PRIM_ATOL / PRIM_RTOL_T override the
+// error-controlled integrator's weights (ChemParams::rtol / atol / rtol_T). Unset = the
+// library defaults.
+static double TolFromEnv(const char* name, double fallback) {
+  const char* e = std::getenv(name);
+  return (e != nullptr && e[0] != '\0') ? std::stod(e) : fallback;
+}
+
+static double SahaThresholdNH() {
+  static const double nh = [] {
+    const char* e = std::getenv("PRIM_SAHA_NH");
+    return (e != nullptr && e[0] != '\0') ? std::stod(e) : 1.0e18;
+  }();
+  return nh;
+}
 
 namespace {
 
@@ -273,13 +314,12 @@ void WriteHdf5File(hid_t fid, const std::string& cr_tag,
   // ── Root attributes ───────────────────────────────────────────────────────
   {
     char desc[128];
-    std::snprintf(desc, sizeof(desc),
-                  "zero-metal collapse CR%s (C++ port of Nakauchi+2021)",
+    std::snprintf(desc, sizeof(desc), "zero-metal one-zone collapse CR%s",
                   cr_tag.c_str());
     H5WriteStrAttr(fid, "description", desc);
   }
-  // Output schema version (N-B). v1 = legacy x-prefixed dataset names
-  // (nH/Lambda_*/Gamma_*/MJ/lmbd_J); v2 = renamed (nH/Lambda_*/Gamma_*/M_J/
+  // Output schema version. v1 = legacy x-prefixed dataset names
+  // (xnH/xLmbd_*/xGam_*/xMJ/xlmbd_J); v2 = renamed (nH/Lambda_*/Gamma_*/M_J/
   // lambda_J). Post-processing tools branch on this attribute.
   H5WriteIntAttr(fid, "schema_version", 2);
   H5WriteStrAttr(fid, "cr_tag", cr_tag);
@@ -451,15 +491,20 @@ void RunCollapse(
 
   arche::ChemParams params{};
   params.T_rad = T_rad;
+  params.saha_nonthermal_tol = SahaNonthermalTol();
+  params.use_saha = UseSaha();
+  params.saha_threshold_nH = SahaThresholdNH();
+  params.rtol = TolFromEnv("PRIM_RTOL", params.rtol);
+  params.atol = TolFromEnv("PRIM_ATOL", params.atol);
+  params.rtol_T = TolFromEnv("PRIM_RTOL_T", params.rtol_T);
   // params.zeta is set each step via ChemShielding
 
   double t = 0.0;
   double dt = 1.0e-1;
   double t_chem = 1.0e-1;
   double t_cool = 0.0;
-  double esc_cnt = 1.0;
-  double tau_cnt = 0.0;
-  double k_gas = 0.0;  // gas opacity [cm^2/g]; persists across steps
+  double tau_cnt =
+      0.0;  // continuum depth of the last step's end state (output)
   double Nc_H = 0.0;
   double Nc_H2 = 0.0;
   double Nc_HD = 0.0;
@@ -517,17 +562,15 @@ void RunCollapse(
     Nc_H2 = y[AppSp::H2] * nH * lsh_H2;
     Nc_HD = y[AppSp::HD] * nH * lsh_HD;
 
-    tau_cnt = k_gas * rho * lmbd_J;
-    esc_cnt = (tau_cnt > 1.0) ? 1.0 / (tau_cnt * tau_cnt) : 1.0;
-
     // ── Build shielding environment ───────────────────────────────────────
     arche::ChemShielding shield;
     shield.zeta = zeta0 * std::exp(-rho * lmbd_J / cr_atten_col_dens);
     shield.Nc_H = Nc_H;
     shield.Nc_H2 = Nc_H2;
     shield.Nc_HD = Nc_HD;
-    shield.tau_cnt = tau_cnt;
-    shield.esc_cnt = esc_cnt;
+    // The continuum depth is resolved inside chem_full_step from this column and the
+    // opacity of each state it evaluates.
+    shield.cnt_column = rho * lmbd_J;
     shield.J_LW21 = jlw21;
 #ifdef ARCHE_XRAY
     {
@@ -565,7 +608,7 @@ void RunCollapse(
 
     mu = st.mu;
     gamma = st.gamma;
-    k_gas = rates.k_gas;
+    tau_cnt = rates.tau_cnt;
 
     const double Lambda_line = rates.Lambda_line;
     const double Lambda_H2 = rates.Lambda_H2;

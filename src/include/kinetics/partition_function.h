@@ -146,8 +146,7 @@ inline double H2_pf(double T_K) {
 //                  optionally floored at 1.0.
 //
 // pf_eval() evaluates a descriptor; the four factory helpers below build one.
-// The operations match the historical inline evaluators exactly (same order),
-// so values are bit-for-bit identical to the previous slot-indexed path.
+// Each kind evaluates its formula in a fixed operation order.
 // ---------------------------------------------------------------------------
 enum class PfKind { Constant, Analytic, Bc16, NumericTable };
 

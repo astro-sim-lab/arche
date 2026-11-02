@@ -8,30 +8,20 @@
 //
 // WHY THIS EXISTS
 // ---------------
-// chemreact() solves  dy = r_f(y_init + dy)*dt  by Newton-Raphson.  The
+// The backward-Euler step solves  dy = r_f(y_init + dy)*dt  by Newton.  The
 // increment it computes is conservative *by construction*: for any element (or
 // charge) count vector c we have c·r_f = 0, hence c^T J = 0, hence
 // c^T A = c^T for A = I - dt*J, hence c^T A^{-1} = c^T, and the Newton update
-// ddy = A^{-1}(r_f*dt - dy) drives c·dy to zero at every iteration.  Measured
-// on the one-zone primordial collapse, |c·dy| / (element total) stays between
-// 1e-19 and 1e-17 at every step size tried — the linear algebra is not the
-// problem.
+// ddy = A^{-1}(r_f*dt - dy) drives c·dy to zero at every iteration up to the
+// rounding of the linear solve.
 //
 // The increment is nevertheless *applied* as  y[i] += ddy[i], which rounds at
 // ulp(y[i]).  Species sharing an element sit decades apart in magnitude
 // (ulp(y_D) = 3.4e-21 against ulp(y_HD) = 1.3e-23 and ulp(y_D+) = 1.3e-29 in a
 // typical collapse), so those roundings cannot cancel between them, and the
-// element total absorbs ~1 ulp of its dominant carrier per step.  The per-step
-// error is not white — its measured lag-1 autocorrelation reaches +0.48 — so
-// the sum grows faster than sqrt(N_steps): at N = 2.3e6 the deuterium residual
-// reaches 1.6e-11, about 3000x its value at N = 2.3e4.  Superlinear in step
-// count, which is what the projection below exists to bound.
-// Measured on 15-species primordial collapses at nH <= 1e8 cm^-3 with g++
-// 13.3.0.  An independent measurement on the 89-species metal network at
-// nH <= 1e23 with clang-22 reports a sqrt(N_steps) random walk instead; the two
-// regimes are not reconciled.  The projection does not depend on which is right
-// -- it re-imposes the constraint at the end of the step whatever produced the
-// drift.
+// element total absorbs up to ~1 ulp of its dominant carrier per step.  Over the
+// many steps of a collapse these roundings accumulate; the projection below
+// bounds the accumulated drift whatever its statistics.
 //
 // WHAT THIS DOES
 // --------------
@@ -40,47 +30,44 @@
 //
 //     find  Δ  minimising  Σ_i Δ_i² / w_i    subject to    C Δ = r
 //
-// with C the (m x N_sp) matrix whose rows are the per-species element counts
-// and the per-species charge, w_i = max(y_i, 0), and the target r
+// with C the (m x N_sp) matrix whose rows are the per-species element counts,
+// the number of grains and the per-species charge, w_i = max(y_i, 0), and the
+// target r
 //
 //     element rows : r_e = Σ_i C[e][i] (y_in[i] − y[i])   (+ carry, below)
 //     charge row   : r_q = − Σ_i q_i y[i]
 //
 // The solution is Δ = W C^T (C W C^T)^{-1} r: one m x m symmetric
-// positive-definite solve, m <= 5 for the primordial networks.
+// positive-definite solve, m <= 11 for the shipped networks.
 //
 // ELEMENTS ARE CONSERVED, CHARGE IS NEUTRALISED — a deliberate asymmetry.
 // An element total has no reference the kernel knows (a fluid code advects
 // composition in and out), so the only defensible target is "whatever this step
 // was handed".  Net charge does have one: a plasma is quasi-neutral, arche's
 // own initial conditions set y_e = Σ_ion q y, and the collapse app's
-// charge_imbal diagnostic is written on the assumption that it is ~0.  Chasing
-// the input value instead was implemented and measured: it freezes whatever
-// float64 net charge the early, electron-rich phase happened to accumulate, and
-// because the normalisation Σ_{q>0} q y then falls five decades along the
-// collapse, the normalised charge residual came out 15x WORSE than leaving
-// the charge row unprojected.
-// A caller that really does hand in a charged cell is protected by
-// kMaxRelShift.  The guard bounds the per-species RELATIVE shift, and for a
-// pure charge residual shift_i = q_i * lambda_q with lambda_q = r_q / SUM_i
-// y_i q_i^2, so the projection declines once
+// charge_imbal diagnostic is written on the assumption that it is ~0.  Holding
+// the input value instead would freeze whatever float64 net charge the early,
+// electron-rich phase accumulated, while the normalisation Σ_{q>0} q y falls by
+// orders of magnitude along the collapse.
+// A charged input is neutralised once, before the first step, by this projection
+// (chem_integrate_adaptive in solve/chemistry.h) and rejected when that needs more
+// than kMaxRelShift, unless its net charge is at most atol: that is moved onto the
+// electrons instead.  The guard bounds the per-species RELATIVE shift, and for a pure charge residual
+// shift_i = q_i * lambda_q with lambda_q = r_q / SUM_i y_i q_i^2, so the
+// projection declines once
 //     |SUM_i q_i y_i|  >  (kMaxRelShift / max_i|q_i|) * SUM_i y_i q_i^2
 // = 3.33e-3 * SUM_i y_i q_i^2 for the 23-species network and 1.0e-2 * SUM_i
 // y_i q_i^2 for the 15-species one.  The two differ only because the 23-species
 // catalog carries Li+++ (q = +3) and the compact one stops at singly charged
-// ions; the guard is therefore 3x tighter for the full network on account of a
-// species whose abundance never exceeds ~2e-19.
+// ions.
 //
 // THE SUB-ULP REMAINDER IS CARRIED (element rows only).  r_e is typically a
-// fraction of ulp(y_dominant), so applying it rounds to zero as often as not.
-// Dropping that remainder reproduces the original failure one decade down: the
-// projection's own rounding random-walks, and with the measured sign bias the
-// deuterium residual still reached 1e-12 at 2.3e6 steps (16x better than
-// no projection at all, but not a fix).  Feeding the unapplied part back into
-// the next step's
-// target — a first-order delta-sigma accumulator — bounds the drift at ~1 ulp
-// of the element total for any number of steps.  The charge row needs no carry:
-// its target is absolute, so each step already sees the full remaining error.
+// fraction of ulp(y_dominant), so applying it rounds to zero as often as not, and
+// the projection's own rounding would then accumulate like the drift it repairs.
+// Feeding the unapplied part back into the next step's target — a first-order
+// delta-sigma accumulator — bounds the drift at ~1 ulp of the element total for
+// any number of steps.  The charge row needs no carry: its target is absolute,
+// so each step already sees the full remaining error.
 //
 // THE WEIGHT IS A CHOICE, NOT A DERIVATION.  w_i = y_i makes the *relative*
 // shift Δ_i/y_i identical for every species carrying a given element, so a
@@ -102,121 +89,69 @@
 // WHY THE ROWS ARE ELEMENT COUNTS AND NOT SOME OTHER BASIS OF THE SAME SPACE.
 // The conserved subspace is exactly the left null space of the stoichiometric
 // matrix, and any basis of it defines the same constraint set in exact
-// arithmetic.  It does not define the same computation: with y taken from a
-// real collapse, the Jacobi-scaled normal matrix C W C^T has condition number
-// 1.02 in the element/charge basis and 2.4e8 in an orthonormalised basis of the
-// same space, because the element totals span 1 (H) to 4.65e-10 (Li) and any
-// mixing buries the small ones.  An orthonormalised basis was implemented,
-// measured, and rejected: it made the Li residual 1000x *worse*.
+// arithmetic.  It does not define the same computation: the element totals span
+// 1 (H) to 4.65e-10 (Li), and a basis that mixes elements (an orthonormalised
+// one, for example) adds rows of very different scale, which ill-conditions
+// C W C^T and buries the small totals in the rounding of the large ones.  In the
+// element/charge basis each row carries one element, so rows of different scale
+// do not mix and the Jacobi scaling below removes the scale differences.
 //
 // SCOPE.  (1) Every shipped network.  The invariant matrix is built from
-// core/species_composition.h, which registers all 89 catalog species over nine
-// elements; a model whose species are not all registered gets n_invariants = 0
-// and no projection, i.e. exactly the behaviour without this file.  Measured
-// n_invariants: 5 primordial (full and Minimal), 8 Nakauchi2021_Minimal (the
-// compact metal network carries no K or Na, so those two rows are pruned), 10
-// Nakauchi2021.  (2) The implicit chemistry solve only: the projection runs
-// before the operator-split Lyman-Werner / X-ray channels of chem_full_step(),
-// whose stoichiometry is outside the reaction table this file validates against.
+// core/species_composition.h, which registers all 95 catalog species over nine
+// elements, plus one row for the number of grains (composition::grain_count: a
+// grain changes its charge, never its number); a model whose species are not all
+// registered gets n_invariants = 0, and then every step is rejected.
+// n_invariants: 5 primordial (full and Minimal; no grains), 9
+// Nakauchi2021_Minimal (the compact metal network carries no K or Na, so those
+// two rows are pruned), 11 Nakauchi2021.  The metals locked in the dust (C_s,
+// O_s, Mg_s, Na_s, K_s) count toward their elements, so the metal rows conserve
+// the gas + dust totals.  (2) The implicit chemistry solve only: the projection
+// runs before the operator-split channels of chem_full_step() (X-ray, and
+// Lyman-Werner after a Saha step), whose stoichiometry is outside the reaction
+// table this file validates against.  In the network steps the Lyman-Werner
+// channels are part of the step's rates and keep every element and the charge.
 //
-// The projection is NOT result-neutral on metal_grain: measured at zeta = 0,
-// Z = 1, 24 of 33 datasets differ from an unprojected run (attributes 24/24
-// unchanged).  On the primordial networks it is result-neutral: 25/25
-// datasets byte-equal.
-//
-// MEASURED RANGE.  PRECONDITIONS: J_LW21 == 0 and ARCHE_XRAY off.  Under those,
-// element residuals stay at the float64 representation floor of the element
-// total (0 .. 4.4e-16), and the net charge residual at (0 .. 6.0e-16), over
-// nH = 0.1 .. 1e23 cm^-3 on both primordial networks, at zeta = 0 and
-// zeta = 1e-17, under g++ 13.3.0, clang 22.1.6 and clang 22.1.8.  The
-// same runs reach 7.6e-11 (H) and 1.06e-6 (net charge) without it.  No density
-// was found
-// at which the correction stops holding.
-//   The number quoted is a property of the DIAGNOSTIC, not of the solver: this
-// file never forms an element total in float64 (it accumulates increments plus
-// carry in long double), so the floor depends on how the checker sums.  The same
-// projected data gives 1.1e-16 (fsum) .. 4.4e-16 (naive left-to-right) for the
-// H
-// row.  4.4e-16 is the loosest convention and is therefore the value to gate on
-// -- but name the convention when you do.
-//
-// WITH J_LW21 > 0 THE ELEMENT FLOOR IS 2.4 DECADES HIGHER.  Measured (clang
-// 22.1.8, 4 runs): H reaches 1.5e-13 and D 5.5e-14, while He, Li and the
-// net charge stay at the floor quoted above.  That split is the diagnosis: no
-// Lyman-Werner channel touches He or Li, and the charge row's target is absolute
-// and re-derived every step.  The cause is the placement recorded under SCOPE --
-// the LW block of chem_full_step() runs AFTER this projection, so its own
-// rounding is folded into the next step's y_in and is never corrected.  The
-// effect is essentially independent of the field strength (factor 1.32 across 11
-// decades of J_LW21, worst at 1e-8, not at the 1e3 of README Quick Start Case 3)
-// and it SATURATES rather than accumulating: a sqrt(N_steps) walk, so reaching
-// 1e-12 would take ~4e7 steps against the 5.6e4 of the longest run measured.
-// Without the projection the same runs reach 4.6e-11 (H) and 6.3e-09 (D) -- it
-// is still 3.6e2x (H) and 1.1e5x (D) better with the field on.
-//
-// The X-ray block is the second uncorrected operator-split channel and is
-// UNMEASURED: no run anywhere has had J_LW21 > 0 with ARCHE_XRAY compiled in.
+// The residual floor is a property of the DIAGNOSTIC as well as of the solver:
+// this file never forms an element total in float64 (it accumulates increments
+// plus carry in long double), so the floor a checker reports depends on how it
+// sums (compensated or naive left-to-right).  Name the summation convention when
+// quoting one.
 //
 // KNOWN LIMITS.
-//  * Above nH_eq = 1e18 cm^-3 with zeta == 0 and zeta_X == 0, chemreact() takes
+//  * Above nH_eq = 1e18 cm^-3 with zeta == 0 and zeta_X == 0, the step takes
 //    a Saha equilibrium branch that RE-ANCHORS the He, D and Li totals to
 //    hard-coded reference abundances, while this projection's target is the
-//    totals the step was handed.  At J_LW21 == 0 the two agree to float64 at the
-//    crossing and do not fight.  They DO fight as soon as anything else perturbs
-//    the totals, and then the projection wins every step.  Measured (zeta = 0,
-//    J_LW21 = 1e3, 764 output rows above 1e18): without the projection the
-//    branch returns the D total to yD = 2.58e-5 every step (max deviation
-//    2.0 ulp, 338/764 rows exactly 0); with it, D sits 4.0e-14 (307 ulp) below
-//    the reference and never returns to it, frozen from nH = 2.5e19 to the
-//    last row.  Over the whole run the projected D residual is still 7.2e4x
-//    smaller, and 4e-14 relative on yD is ~12 decades below the BBN
-//    uncertainty on D/H: a semantic change, not a physical error.  Note the
-//    branch does not leave H alone either -- it drives the H total to 1.0 by 2D
-//    Newton, but only to Newton tolerance (without the projection,
-//    |H_tot - 1| = 6.6e-11 here).
-//    A caller entering that branch with a composition away from the reference
-//    values has not been tested.
-//  * On metal_grain the singular-matrix branch fires on the MAJORITY of steps
-//    unless the ACTIVE SET below is applied: the network starts with all of
-//    its K and Na in
-//    the application-side grain reservoir, so both rows were empty and the
-//    joint solve declined for 3566 of 5537 output rows (64%, zeta = 1e-17,
-//    Z = 1) and 4034 of 5612 (72%, zeta = 0, Z = 1e-3).  The ACTIVE SET below
-//    is the fix: an empty row with nothing owed is dropped, and the remaining
-//    rows are still corrected.  Both remaining decline paths -- kMaxRelShift
-//    exceeded, and an empty row that IS owed a correction -- remain designed
-//    behaviour rather than demonstrated behaviour.
-//  * Conditioning after Jacobi scaling, measured on the 10-row metal system
-//    (zeta = 1e-17, Z = 1, 1971 engaged output rows): cond(G) min 1.117,
-//    median 6.37, max 6.725 at nH = 3.7e15.  Nine decades of element-total
-//    spread do not threaten the Cholesky; rank deficiency does, which is what
-//    the active set handles.
-//  * The projection changes abundances only, but at zeta != 0 those feed the
-//    ionisation terms and hence the adaptive timestep, so the density schedule
-//    itself moves by up to 1.2e-14 relative.  At zeta == 0 the nH grid is
-//    bit-identical.
+//    totals the step was handed.  When the totals agree with the references the
+//    two coincide; when anything else has moved the totals, the projection keeps
+//    the handed totals and the Saha branch's re-anchoring no longer holds.  The
+//    branch drives the H total to 1.0 only to its Newton tolerance.
+//  * An empty row (all carriers exactly zero) with nothing owed is dropped from
+//    that step's solve (the ACTIVE SET below); otherwise it would make the
+//    weighted matrix singular and decline the whole projection.  An empty row
+//    that IS owed a correction, and a repair beyond kMaxRelShift, remain decline
+//    paths.
+//  * The projection changes abundances only, but those feed the ionisation terms
+//    and hence the adaptive timestep, so the density schedule of a collapse can
+//    move at the rounding level.
 //  * The long double accumulations below are this codebase's only arithmetic
 //    whose width depends on the ABI (80-bit extended on x86-64 SysV, but 64-bit
 //    on some others).  Deliberately NOT guarded by a static_assert: failing the
 //    build on such a target is worse than the degradation, which is confined to
 //    the charge row (the element rows sum increments, not totals, and provably
-//    do not need the extra width).  If you port to an ABI where
-//    LDBL_MANT_DIG == DBL_MANT_DIG, re-measure the charge residual before
-//    quoting the range above.
+//    do not need the extra width).
 //  * carry lives in ChemCell, not in ChemState, so the documented copy-in /
 //    copy-out cell API can neither see nor reset it.  A caller that reuses one
 //    ChemCell as scratch across many fluid cells will replay a foreign
 //    remainder into the next cell's first step; call ChemCell::reset_var()
 //    between cells.  The error this bounds is <= half an ulp of the element
-//    total (derived, not measured).
+//    total (derived).
 //  * build_invariants() balances all three stoichiometry tables: tbl.reactions,
 //    tbl.saha (n_saha = 18 full / 9 minimal for primordial, 53 for
 //    metal_grain) and tbl.grain_reactions (148 for metal_grain; primordial has
 //    n_grain = 0).  saha drives the branch that rewrites y above nH_eq and
 //    grain_reactions moves species between the gas and the mantle, so a typo
-//    in either is as consequential as one in reactions.  Measured: all 18
-//    primordial saha records and all 53 + 148 metal records balance in nine
-//    elements plus charge, so the check fails no shipped network closed.
+//    in either is as consequential as one in reactions.  Every shipped table
+//    balances (n_invariants > 0 for all four models).
 //
 // ---------------------------------------------------------------------------
 #include <array>
@@ -229,15 +164,14 @@
 namespace arche {
 namespace conservation {
 
-//: Largest relative per-species shift the projection will apply.  Matched to
-//: the 1e-2 element/charge residual bound the collapse app is validated
-//: against: a violation that would need a larger repair is a defect to be seen,
-//: not to be papered over, so the projection declines and leaves both the state
-//: and the evidence untouched.
+//: Largest relative per-species shift the projection will apply.  A violation
+//: that would need a larger repair is a defect to be seen, not to be papered
+//: over, so the projection declines and leaves both the state and the evidence
+//: untouched.
 inline constexpr double kMaxRelShift = 1.0e-2;
 
-//: Upper bound on the number of invariant rows: one per tracked element plus
-//: charge.  Sizes the per-cell carry (ChemCell::cons_carry) and the scratch
+//: Upper bound on the number of invariant rows: one per tracked element, one for
+//: the number of grains, plus charge.  Sizes the per-cell carry (ChemCell::cons_carry) and the scratch
 //: normal matrix below.  Defined next to the element list itself so that this
 //: and ReactionTable::invariants cannot drift apart.
 inline constexpr int kMaxRows = composition::kMaxInvariantRows;
@@ -264,7 +198,10 @@ template <class SpeciesSetT, class Table>
 int build_invariants(const Table& tbl, double* out, int& charge_row) {
   charge_row = -1;
   constexpr int N_sp = Table::N_sp;
-  constexpr int N_rows = composition::kNElements + 1;  // elements + charge
+  // elements, the number of grains, charge (always last)
+  constexpr int N_rows = composition::kNElements + 2;
+  constexpr int kGrainRow = composition::kNElements;
+  constexpr int kChargeRow = composition::kNElements + 1;
 
   // Per-species integer composition, in the model's local index order.
   std::array<std::array<int, N_rows>, N_sp> comp{};
@@ -273,7 +210,8 @@ int build_invariants(const Table& tbl, double* out, int& charge_row) {
         composition::composition_of(SpeciesSetT::canonical(i));
     if (!c.known) return 0;
     for (int e = 0; e < composition::kNElements; ++e) comp[i][e] = c.n[e];
-    comp[i][composition::kNElements] = c.q;
+    comp[i][kGrainRow] = composition::grain_count(SpeciesSetT::canonical(i));
+    comp[i][kChargeRow] = c.q;
   }
 
   // One record balances when every tracked row nets to zero.  Unused slots hold
@@ -343,7 +281,7 @@ int build_invariants(const Table& tbl, double* out, int& charge_row) {
     if (!any) continue;  // element (or charge) not carried by this model
     double* row = out + static_cast<std::size_t>(m) * N_sp;
     for (int i = 0; i < N_sp; ++i) row[i] = static_cast<double>(comp[i][e]);
-    if (e == composition::kNElements) charge_row = m;
+    if (e == kChargeRow) charge_row = m;
     ++m;
   }
   return m;
@@ -377,11 +315,51 @@ void fill_invariants(Table& tbl) {
 // having called it.
 // ---------------------------------------------------------------------------
 template <int N_sp>
+bool project_nonzero(const double* inv, int m, int charge_row,
+                     const std::array<double, N_sp>& y_in,
+                     std::array<double, N_sp>& y,
+                     std::array<double, kMaxRows>& carry);
+
+// An element whose carriers are all exactly zero entering the step, with nothing
+// carried, has a total of exactly zero; its carriers are non-negative, so each of them
+// leaves the step at zero.  Whatever the step left on them is rounding of the linear
+// solve (a carrier's row couples to other carriers of the same element, all zero), and
+// a correction of it would have to remove all of it -- a relative repair of -1, which
+// project_nonzero declines.  They are set to zero first; the charge row then accounts
+// for any charge they held.
+template <int N_sp>
 bool project(const double* inv, int m, int charge_row,
              const std::array<double, N_sp>& y_in, std::array<double, N_sp>& y,
              std::array<double, kMaxRows>& carry) {
   if (m <= 0 || m > N_sp || m > kMaxRows) return false;
+  bool cleared = false;
+  std::array<double, N_sp> yc = y;
+  for (int k = 0; k < m; ++k) {
+    if (k == charge_row || carry[k] != 0.0) continue;
+    const double* c = inv + static_cast<std::size_t>(k) * N_sp;
+    bool empty = true;
+    for (int i = 0; i < N_sp && empty; ++i)
+      if (c[i] != 0.0 && y_in[i] != 0.0) empty = false;
+    if (!empty) continue;
+    for (int i = 0; i < N_sp; ++i)
+      if (c[i] != 0.0 && yc[i] != 0.0) {
+        yc[i] = 0.0;
+        cleared = true;
+      }
+  }
+  if (!cleared)
+    return project_nonzero<N_sp>(inv, m, charge_row, y_in, y, carry);
+  // Declining leaves y as it was, so the cleared state is only kept on success.
+  if (!project_nonzero<N_sp>(inv, m, charge_row, y_in, yc, carry)) return false;
+  y = yc;
+  return true;
+}
 
+template <int N_sp>
+bool project_nonzero(const double* inv, int m, int charge_row,
+                     const std::array<double, N_sp>& y_in,
+                     std::array<double, N_sp>& y,
+                     std::array<double, kMaxRows>& carry) {
   // Targets.  Element rows are formed from the per-step INCREMENTS and never as
   // the difference of two element totals: the increments are ~1e9 times smaller
   // than the totals here, so this expression carries the residual at full
@@ -390,6 +368,8 @@ bool project(const double* inv, int m, int charge_row,
   // has no such shortcut and is accumulated in long double to keep the
   // cancellation between the electron and ion terms from setting the floor.
   std::array<double, kMaxRows> r{};
+  std::array<bool, kMaxRows>
+      moved_by_step{};  // element rows: this step's increment != 0
   bool all_zero = true;
   for (int k = 0; k < m; ++k) {
     const double* c = inv + static_cast<std::size_t>(k) * N_sp;
@@ -402,6 +382,7 @@ bool project(const double* inv, int m, int charge_row,
         s += static_cast<long double>(c[i]) *
              (static_cast<long double>(y_in[i]) -
               static_cast<long double>(y[i]));
+      moved_by_step[k] = (s != 0.0L);
       s += static_cast<long double>(carry[k]);
     }
     r[k] = static_cast<double>(s);
@@ -439,18 +420,20 @@ bool project(const double* inv, int m, int charge_row,
   }
 
   // ACTIVE SET.  A row whose weight is identically zero -- every carrier of that
-  // element absent from y -- puts a zero on G's diagonal.  Declining the whole
-  // projection there is not a rare corner: the full metal network starts with
-  // ALL of its K and Na in the application-side grain reservoir (yKs / yNas in
-  // apps/collapse_metal_grain/main.cc), so y[K] = y[K+] = y[Na] = y[Na+] = 0
-  // and both rows are empty until evaporation releases them.  Measured on
-  // zeta = 1e-17, Z = 1: that is 3566 of 5537 output rows, 64% of the collapse,
-  // during which the H / He / D / Li rows would be discarded too -- leaving the
-  // projection configured (n_invariants = 10) and silently inert.
+  // element absent from y (a metal-free composition in a metal network, or the
+  // grains after complete evaporation) -- puts a zero on G's diagonal.
+  // Declining the whole projection there would discard the other rows too.
   //   gkk == 0 and r == 0 -> nothing to conserve and nothing owed; drop the row
   //                          and solve the rest.
   //   gkk == 0 and r != 0 -> the step changed an element that no surviving
   //                          species carries.  Unrepairable: decline.
+  //   gkk == 0, only the carry owed -> the step moved none of it (increment
+  //                          exactly 0), so the total is exactly zero on both
+  //                          sides and the remainder belongs to a total that no
+  //                          longer exists -- the caller removed every carrier
+  //                          between steps (the library zeroes the grains at
+  //                          complete evaporation, solve/grain_evaporation.h).
+  //                          Drop the row and clear its carry.
   // A diagonal regulariser is NOT the fix.  It would manufacture a correction
   // and spread it over species that cannot carry the element at all.
   std::array<int, kMaxRows> act{};
@@ -459,7 +442,8 @@ bool project(const double* inv, int m, int charge_row,
     if (g[k * kLd + k] > 0.0) {
       act[n_act++] = k;
     } else if (r[k] != 0.0) {
-      return false;
+      if (k == charge_row || moved_by_step[k]) return false;
+      r[k] = 0.0;  // the carry loop below then stores 0 for this row
     }
   }
   if (n_act == 0) {

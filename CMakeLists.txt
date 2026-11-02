@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18)
-project(arche VERSION 1.1.0 LANGUAGES C CXX)
+project(arche VERSION 2.0.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -38,6 +38,7 @@ add_library(arche STATIC
     src/lib/arche_api.cc
     src/lib/arche_capi.cc
     src/thermo/eos.cc
+    src/cooling/cooling_memo.cc
 )
 add_library(arche::arche ALIAS arche)
 # Compile the static archive as position-independent code.  Modern toolchains
@@ -52,12 +53,10 @@ target_include_directories(arche PUBLIC
 )
 target_link_libraries(arche PUBLIC Eigen3::Eigen ${HDF5_C_LIBRARIES})
 option(ARCHE_XRAY     "Enable X-ray background radiation (primary + secondary ionization + heating)" OFF)  # experimental; disabled by default until validated
-option(ARCHE_SUBCYCLE "Enable NR subcycling: halve dt and retry when chemcool NR does not converge" OFF)
 
 target_compile_definitions(arche PUBLIC
     ARCHE_USE_EIGEN
     $<$<BOOL:${ARCHE_XRAY}>:ARCHE_XRAY>
-    $<$<BOOL:${ARCHE_SUBCYCLE}>:ARCHE_SUBCYCLE>
 )
 target_compile_options(arche PUBLIC
     $<$<CONFIG:Release>:

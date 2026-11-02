@@ -103,15 +103,16 @@ constexpr double yLi = abundance_ref::yLi;  // Li/H
 }  // namespace zero_metal
 
 // ---------------------------------------------------------------------------
-// metal_grain model  (N_sp=89, N_react=1200)
+// metal_grain model  (N_sp=95, N_react=1200)
 // ---------------------------------------------------------------------------
 namespace metal_grain {
 
 constexpr int N_react = 1200;
 
 // Species selection from the canonical catalog, in the historical metal_grain
-// order (local indices 0..88).  N_sp, the Sp enum, and the grain-kernel mass
-// arrays are all derived from this set rather than hand-numbered (see
+// order (local indices 0..88), followed by the dust reservoirs of the grain
+// evaporation (89..94).  N_sp, the Sp enum, and the grain-kernel mass arrays
+// are all derived from this set rather than hand-numbered (see
 // core/species_catalog.h).  Species 0-15 match zero_metal; 16+ add the
 // metal/grain/surface species (Li is relocated to 50-56).
 // clang-format off
@@ -130,7 +131,8 @@ using Species = SpeciesSet<
     SpId::D_p, SpId::D_c, SpId::HD_p, SpId::O_p, SpId::O2_p, SpId::OH_p,
     SpId::CO_p, SpId::CO2_p, SpId::H2O_p, SpId::HO2_p, SpId::H2O2_p,
     SpId::HCO_p, SpId::H2CO_p, SpId::C_p, SpId::CH_p, SpId::CH2_p,
-    SpId::CH3_p, SpId::CH4_p>;
+    SpId::CH3_p, SpId::CH4_p, SpId::C_s, SpId::O_s, SpId::Mg_s, SpId::Na_s,
+    SpId::K_s, SpId::Gr_v>;
 
 // clang-format on
 constexpr int N_sp = Species::N;
@@ -236,17 +238,27 @@ enum Sp : int {
   CH2_p = Species::local(SpId::CH2_p),  // CH2 on grain
   CH3_p = Species::local(SpId::CH3_p),  // CH3 on grain
   CH4_p = Species::local(SpId::CH4_p),  // CH4 on grain
+  // Metals locked in the dust and the grain-volume tracer (grain evaporation)
+  C_s = Species::local(SpId::C_s),
+  O_s = Species::local(SpId::O_s),
+  Mg_s = Species::local(SpId::Mg_s),
+  Na_s = Species::local(SpId::Na_s),
+  K_s = Species::local(SpId::K_s),
+  Gr_v = Species::local(SpId::Gr_v),
 };
 // clang-format on
 
 // Layout lock: the derived indices must reproduce the historical 89-species
-// metal_grain layout used by the reaction tables and grain kernels.
-static_assert(N_sp == 89, "metal_grain must carry 89 species");
+// metal_grain layout used by the reaction tables and grain kernels, with the
+// dust reservoirs after it.
+static_assert(N_sp == 95, "metal_grain must carry 95 species");
+// The species the partition-function table file covers (0..88).
+constexpr int N_sp_table = 89;
 static_assert(
     H == 0 && H2 == 1 && e == 2 && Dm == 15 && C == 16 && O == 29 &&
         H2COHp == 49 && Li == 50 && Lippp == 56 && K == 57 && Mgp == 62 &&
         Gr == 63 && Gr2m == 67 && H_p == 68 && H_c == 69 && H2_p == 70 &&
-        D_c == 72 && H2O_p == 79 && CH4_p == 88,
+        D_c == 72 && H2O_p == 79 && CH4_p == 88 && C_s == 89 && Gr_v == 94,
     "metal_grain Sp indices must match the historical catalog layout");
 // crit mapping (C++ 0-based):
 //   JH2  = y[H2_p  = 70]

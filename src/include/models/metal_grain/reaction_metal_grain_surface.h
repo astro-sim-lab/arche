@@ -62,10 +62,18 @@ namespace arche {
 //     zeta   : cosmic-ray ionization rate [s^{-1}]
 //     kgr   : output array, length 151
 // ---------------------------------------------------------------------------
+template <class Want>
 inline void grain_coef_rates(double nH, double T_K, double T_gr_K,
                              double Z_metal, double JH2, double JH2O,
                              double Jtot, double zeta, double T_cr_eff,
-                             std::array<double, 151>& kgr) {
+                             std::array<double, 151>& kgr, Want want) {
+  // Entries are evaluated only where `want` asks for them (the sink's kept slots),
+  // together with the entries they are copied from.
+  auto need = [&](int i) -> bool {
+    return want(i) || (i == 117 && want(120)) || (i == 118 && want(122)) ||
+           (i == 0 && (want(124) || want(125))) || (i == 3 && want(126));
+  };
+
   // ── Physical constants ────────────────────────────────────────────────
   constexpr double k_B = phys::k_B;
   constexpr double pi = phys::pi;
@@ -118,10 +126,10 @@ inline void grain_coef_rates(double nH, double T_K, double T_gr_K,
   // ==========================================================================
 
   // kgr[0]: H(g) → H(p)
-  kgr[0] = alpha_MRN * stick * vel_H / std::sqrt(mass[0]);
+  if (need(0)) kgr[0] = alpha_MRN * stick * vel_H / std::sqrt(mass[0]);
 
   // kgr[1]: H(g) → H(c)  Esplugues 2016 appendix B
-  {
+  if (need(1)) {
     double m_red = m_p * mass[0];
     double P =
         std::exp(-(2.0e-8 / h_b) * std::sqrt(2.0 * m_red * k_B * 1.0e3)) +
@@ -131,7 +139,7 @@ inline void grain_coef_rates(double nH, double T_K, double T_gr_K,
   }
 
   // kgr[2]: H2(g) → H2(p)
-  kgr[2] = alpha_MRN * stick * vel_H / std::sqrt(mass[2]);
+  if (need(2)) kgr[2] = alpha_MRN * stick * vel_H / std::sqrt(mass[2]);
 
   // D and HD are not depleted onto grain surfaces: their gas-phase abundance
   // (y ~ 1e-5) far exceeds the number of available surface binding sites per H
@@ -141,78 +149,88 @@ inline void grain_coef_rates(double nH, double T_K, double T_gr_K,
   // cold (T_gr ~ T_CMB) grains and spuriously deplete gas-phase HD.  D/HD are
   // therefore kept in the gas, where HD remains an important coolant.
   // kgr[3]: D(g) → D(p)   (physisorption, disabled)
-  kgr[3] = 0.0;
+  if (need(3)) kgr[3] = 0.0;
   // kgr[4]: D(g) → D(c)   (chemisorption, disabled)
-  kgr[4] = 0.0;
+  if (need(4)) kgr[4] = 0.0;
   // kgr[5]: HD(g) → HD(p) (physisorption, disabled)
-  kgr[5] = 0.0;
+  if (need(5)) kgr[5] = 0.0;
 
   // 7..16: O, O2, OH, CO, CO2, H2O, HO2, H2O2, HCO, H2CO
   for (int i = 6; i <= 15; ++i)
-    kgr[i] = alpha_MRN * stick * vel_H / std::sqrt(mass[i]);
+    if (need(i)) kgr[i] = alpha_MRN * stick * vel_H / std::sqrt(mass[i]);
 
   // 17..21: C, CH, CH2, CH3, CH4
   for (int i = 16; i <= 20; ++i)
-    kgr[i] = alpha_MRN * stick * vel_H / std::sqrt(mass[i]);
+    if (need(i)) kgr[i] = alpha_MRN * stick * vel_H / std::sqrt(mass[i]);
 
   // ==========================================================================
   // (2) Thermal desorption  kgr(22..42)  →  C++ [21..41]
   // ==========================================================================
 
   // kgr[21]: H(p) → H(g)
-  kgr[21] = nu_0 * (f_bare * std::exp(-500.0 / T_gr_K) +
-                    f_ice * std::exp(-650.0 / T_gr_K));
+  if (need(21))
+    kgr[21] = nu_0 * (f_bare * std::exp(-500.0 / T_gr_K) +
+                      f_ice * std::exp(-650.0 / T_gr_K));
   // kgr[22]: H(c) → H(g)
-  kgr[22] = nu_0 * std::exp(-1.0e4 / T_gr_K);
+  if (need(22)) kgr[22] = nu_0 * std::exp(-1.0e4 / T_gr_K);
   // kgr[23]: H2(p) → H2(g)
-  kgr[23] = nu_0 * (f_h2b * (f_bare * std::exp(-300.0 / T_gr_K) +
-                             f_ice * std::exp(-500.0 / T_gr_K)) +
-                    f_h2i * std::exp(-100.0 / T_gr_K));
+  if (need(23))
+    kgr[23] = nu_0 * (f_h2b * (f_bare * std::exp(-300.0 / T_gr_K) +
+                               f_ice * std::exp(-500.0 / T_gr_K)) +
+                      f_h2i * std::exp(-100.0 / T_gr_K));
   // kgr[24]: D(p) → D(g)   [H + 58K: Thi et al.]
-  kgr[24] = nu_0 * (f_bare * std::exp(-558.0 / T_gr_K) +
-                    f_ice * std::exp(-708.0 / T_gr_K));
+  if (need(24))
+    kgr[24] = nu_0 * (f_bare * std::exp(-558.0 / T_gr_K) +
+                      f_ice * std::exp(-708.0 / T_gr_K));
   // kgr[25]: D(c) → D(g)
-  kgr[25] = nu_0 * std::exp(-1.0e4 / T_gr_K);
+  if (need(25)) kgr[25] = nu_0 * std::exp(-1.0e4 / T_gr_K);
   // kgr[26]: HD(p) → HD(g)
-  kgr[26] = nu_0 * (f_h2b * (f_bare * std::exp(-358.0 / T_gr_K) +
-                             f_ice * std::exp(-558.0 / T_gr_K)) +
-                    f_h2i * std::exp(-158.0 / T_gr_K));
+  if (need(26))
+    kgr[26] = nu_0 * (f_h2b * (f_bare * std::exp(-358.0 / T_gr_K) +
+                               f_ice * std::exp(-558.0 / T_gr_K)) +
+                      f_h2i * std::exp(-158.0 / T_gr_K));
   // kgr[27]: O(p) → O(g)
-  kgr[27] = nu_0 * (f_bare * std::exp(-1500.0 / T_gr_K) +
-                    f_ice * std::exp(-1420.0 / T_gr_K));
+  if (need(27))
+    kgr[27] = nu_0 * (f_bare * std::exp(-1500.0 / T_gr_K) +
+                      f_ice * std::exp(-1420.0 / T_gr_K));
   // kgr[28]: O2(p) → O2(g)
-  kgr[28] = nu_0 * (f_bare * std::exp(-1250.0 / T_gr_K) +
-                    f_ice * std::exp(-1160.0 / T_gr_K));
+  if (need(28))
+    kgr[28] = nu_0 * (f_bare * std::exp(-1250.0 / T_gr_K) +
+                      f_ice * std::exp(-1160.0 / T_gr_K));
   // kgr[29]: OH(p) → OH(g)
-  kgr[29] = nu_0 * std::exp(-4600.0 / T_gr_K);
+  if (need(29)) kgr[29] = nu_0 * std::exp(-4600.0 / T_gr_K);
   // kgr[30]: CO(p) → CO(g)
-  kgr[30] = nu_0 * (f_bare * std::exp(-1200.0 / T_gr_K) +
-                    f_ice * std::exp(-1300.0 / T_gr_K));
+  if (need(30))
+    kgr[30] = nu_0 * (f_bare * std::exp(-1200.0 / T_gr_K) +
+                      f_ice * std::exp(-1300.0 / T_gr_K));
   // kgr[31]: CO2(p) → CO2(g)
-  kgr[31] = nu_0 * (f_bare * std::exp(-3000.0 / T_gr_K) +
-                    f_ice * std::exp(-2670.0 / T_gr_K));
+  if (need(31))
+    kgr[31] = nu_0 * (f_bare * std::exp(-3000.0 / T_gr_K) +
+                      f_ice * std::exp(-2670.0 / T_gr_K));
   // kgr[32]: H2O(p) → H2O(g)
-  kgr[32] = nu_0 * (f_bare * std::exp(-4800.0 / T_gr_K) +
-                    f_ice * std::exp(-5700.0 / T_gr_K));
+  if (need(32))
+    kgr[32] = nu_0 * (f_bare * std::exp(-4800.0 / T_gr_K) +
+                      f_ice * std::exp(-5700.0 / T_gr_K));
   // kgr[33]: HO2(p) → O(g) + OH(g)
-  kgr[33] = nu_0 * std::exp(-4000.0 / T_gr_K);
+  if (need(33)) kgr[33] = nu_0 * std::exp(-4000.0 / T_gr_K);
   // kgr[34]: H2O2(p) → H2O2(g)
-  kgr[34] = nu_0 * std::exp(-6000.0 / T_gr_K);
+  if (need(34)) kgr[34] = nu_0 * std::exp(-6000.0 / T_gr_K);
   // kgr[35]: HCO(p) → HCO(g)
-  kgr[35] = nu_0 * std::exp(-1600.0 / T_gr_K);
+  if (need(35)) kgr[35] = nu_0 * std::exp(-1600.0 / T_gr_K);
   // kgr[36]: H2CO(p) → H2CO(g)
-  kgr[36] = nu_0 * (f_bare * std::exp(-3700.0 / T_gr_K) +
-                    f_ice * std::exp(-3250.0 / T_gr_K));
+  if (need(36))
+    kgr[36] = nu_0 * (f_bare * std::exp(-3700.0 / T_gr_K) +
+                      f_ice * std::exp(-3250.0 / T_gr_K));
   // kgr[37]: C(p) → C(g)
-  kgr[37] = nu_0 * std::exp(-800.0 / T_gr_K);
+  if (need(37)) kgr[37] = nu_0 * std::exp(-800.0 / T_gr_K);
   // kgr[38]: CH(p) → CH(g)
-  kgr[38] = nu_0 * std::exp(-870.0 / T_gr_K);
+  if (need(38)) kgr[38] = nu_0 * std::exp(-870.0 / T_gr_K);
   // kgr[39]: CH2(p) → CH2(g)
-  kgr[39] = nu_0 * std::exp(-945.0 / T_gr_K);
+  if (need(39)) kgr[39] = nu_0 * std::exp(-945.0 / T_gr_K);
   // kgr[40]: CH3(p) → CH3(g)
-  kgr[40] = nu_0 * std::exp(-1017.0 / T_gr_K);
+  if (need(40)) kgr[40] = nu_0 * std::exp(-1017.0 / T_gr_K);
   // kgr[41]: CH4(p) → CH4(g)
-  kgr[41] = nu_0 * std::exp(-1090.0 / T_gr_K);
+  if (need(41)) kgr[41] = nu_0 * std::exp(-1090.0 / T_gr_K);
 
   // ==========================================================================
   // (3) Surface reactions, single product stays on grain  kgr(43..58) →
@@ -232,24 +250,29 @@ inline void grain_coef_rates(double nH, double T_K, double T_gr_K,
   };
 
   // kgr[42]: H(p)+H(p) → H2(p)
-  kgr[42] =
-      (nu_0 / nd_nsite) *
-      (Pbr(500., 500.) * (1. - 9.630e-1) + Pic(650., 650.) * (1. - 9.640e-2)) /
-      2.0;
+  if (need(42))
+    kgr[42] = (nu_0 / nd_nsite) *
+              (Pbr(500., 500.) * (1. - 9.630e-1) +
+               Pic(650., 650.) * (1. - 9.640e-2)) /
+              2.0;
   // kgr[43]: H(p)+D(p) → HD(p)
-  kgr[43] = (nu_0 / nd_nsite) * (Pbr(500., 500.) * (1. - 9.630e-1) +
-                                 Pic(650., 650.) * (1. - 9.640e-2));
+  if (need(43))
+    kgr[43] = (nu_0 / nd_nsite) * (Pbr(500., 500.) * (1. - 9.630e-1) +
+                                   Pic(650., 650.) * (1. - 9.640e-2));
   // kgr[44]: H(p)+O(p) → OH(p)
-  kgr[44] = (nu_0 / nd_nsite) * (Pbr(500., 1500.) * (1. - 3.875e-1) +
-                                 Pic(650., 1420.) * (1. - 3.880e-2));
+  if (need(44))
+    kgr[44] = (nu_0 / nd_nsite) * (Pbr(500., 1500.) * (1. - 3.875e-1) +
+                                   Pic(650., 1420.) * (1. - 3.880e-2));
   // kgr[45]: H(p)+OH(p) → H2O(p)
-  kgr[45] = (nu_0 / nd_nsite) * (Pbr(500., 4600.) * (1. - 2.677e-1) +
-                                 Pic(650., 4600.) * (1. - 2.680e-2));
+  if (need(45))
+    kgr[45] = (nu_0 / nd_nsite) * (Pbr(500., 4600.) * (1. - 2.677e-1) +
+                                   Pic(650., 4600.) * (1. - 2.680e-2));
   // kgr[46]: H(p)+O2(p) → HO2(p)
-  kgr[46] = (nu_0 / nd_nsite) * (Pbr(500., 1250.) * (1. - 1.380e-2) +
-                                 Pic(650., 1160.) * (1. - 1.400e-3));
+  if (need(46))
+    kgr[46] = (nu_0 / nd_nsite) * (Pbr(500., 1250.) * (1. - 1.380e-2) +
+                                   Pic(650., 1160.) * (1. - 1.400e-3));
   // kgr[47]: H(p)+CO(p) → HCO(p)   (with tunneling, Ea=2000K)
-  {
+  if (need(47)) {
     double Pb = Pbr(500., 1200.);
     double Pi = Pic(650., 1300.);
     double mu = mass[0] * mass[9] / (mass[0] + mass[9]);
@@ -259,38 +282,46 @@ inline void grain_coef_rates(double nH, double T_K, double T_gr_K,
         (nu_0 / nd_nsite) * Pr * (Pb * (1. - 6.700e-3) + Pi * (1. - 7.000e-4));
   }
   // kgr[48]: H(p)+HO2(p) → H2O2(p)
-  kgr[48] = (nu_0 / nd_nsite) * (Pbr(500., 4000.) * (1. - 4.600e-3) +
-                                 Pic(650., 4000.) * (1. - 5.000e-4));
+  if (need(48))
+    kgr[48] = (nu_0 / nd_nsite) * (Pbr(500., 4000.) * (1. - 4.600e-3) +
+                                   Pic(650., 4000.) * (1. - 5.000e-4));
   // kgr[49]: H(p)+HCO(p) → H2CO(p)
-  kgr[49] = (nu_0 / nd_nsite) * (Pbr(500., 1600.) * (1. - 6.610e-2) +
-                                 Pic(650., 1600.) * (1. - 6.700e-3));
+  if (need(49))
+    kgr[49] = (nu_0 / nd_nsite) * (Pbr(500., 1600.) * (1. - 6.610e-2) +
+                                   Pic(650., 1600.) * (1. - 6.700e-3));
   // kgr[50]: H(p)+C(p) → CH(p)
-  kgr[50] = (nu_0 / nd_nsite) * (Pbr(500., 800.) * (1. - 8.212e-1) +
-                                 Pic(650., 800.) * (1. - 8.220e-2));
+  if (need(50))
+    kgr[50] = (nu_0 / nd_nsite) * (Pbr(500., 800.) * (1. - 8.212e-1) +
+                                   Pic(650., 800.) * (1. - 8.220e-2));
   // kgr[51]: H(p)+CH(p) → CH2(p)
-  kgr[51] = (nu_0 / nd_nsite) * (Pbr(500., 870.) * (1. - 7.668e-1) +
-                                 Pic(650., 870.) * (1. - 7.670e-2));
+  if (need(51))
+    kgr[51] = (nu_0 / nd_nsite) * (Pbr(500., 870.) * (1. - 7.668e-1) +
+                                   Pic(650., 870.) * (1. - 7.670e-2));
   // kgr[52]: H(p)+CH2(p) → CH3(p)
-  kgr[52] = (nu_0 / nd_nsite) * (Pbr(500., 945.) * (1. - 6.937e-1) +
-                                 Pic(650., 945.) * (1. - 6.940e-2));
+  if (need(52))
+    kgr[52] = (nu_0 / nd_nsite) * (Pbr(500., 945.) * (1. - 6.937e-1) +
+                                   Pic(650., 945.) * (1. - 6.940e-2));
   // kgr[53]: H(p)+CH3(p) → CH4(p)
-  kgr[53] = (nu_0 / nd_nsite) * (Pbr(500., 1017.) * (1. - 5.886e-1) +
-                                 Pic(650., 1017.) * (1. - 5.890e-2));
+  if (need(53))
+    kgr[53] = (nu_0 / nd_nsite) * (Pbr(500., 1017.) * (1. - 5.886e-1) +
+                                   Pic(650., 1017.) * (1. - 5.890e-2));
   // kgr[54]: O(p)+O(p) → O2(p)
-  kgr[54] = (nu_0 / nd_nsite) *
-            (Pbr(1500., 1500.) * (1. - 6.884e-1) +
-             Pic(1420., 1420.) * (1. - 6.890e-2)) /
-            2.0;
+  if (need(54))
+    kgr[54] = (nu_0 / nd_nsite) *
+              (Pbr(1500., 1500.) * (1. - 6.884e-1) +
+               Pic(1420., 1420.) * (1. - 6.890e-2)) /
+              2.0;
   // kgr[55]: O(p)+C(p) → CO(p)
-  kgr[55] = (nu_0 / nd_nsite) * (Pbr(1500., 800.) * (1. - 8.659e-1) +
-                                 Pic(1420., 800.) * (1. - 8.660e-2));
+  if (need(55))
+    kgr[55] = (nu_0 / nd_nsite) * (Pbr(1500., 800.) * (1. - 8.659e-1) +
+                                   Pic(1420., 800.) * (1. - 8.660e-2));
   // kgr[56]: O(p)+CO(p) → CO2(p)  (with tunneling, Ea=650K)
-  {
+  if (need(56)) {
     double Pb = Pbr(1500., 1200.);
     double Pi = Pic(1420., 1300.);
     double mu = mass[6] * mass[9] / (mass[6] + mass[9]);
-    // Tunneling factor: empirical form exp(-6.5 + 2.0/T_gr_K), retained for
-    // bit-level reproducibility.
+    // Tunneling factor: the larger of the rectangular-barrier form and the
+    // empirical form exp(-6.5 + 2.0/T_gr_K).
     double Pm = std::max(
         std::exp(-(2.0e-8 / h_b) * std::sqrt(2.0 * m_p * mu * k_B * 650.0)),
         std::exp(-6.5 + 2.0 / T_gr_K));
@@ -299,10 +330,11 @@ inline void grain_coef_rates(double nH, double T_K, double T_gr_K,
         (nu_0 / nd_nsite) * Pr * (Pb * (1. - 1.403e-1) + Pi * (1. - 1.400e-2));
   }
   // kgr[57]: OH(p)+OH(p) → H2O2(p)
-  kgr[57] = (nu_0 / nd_nsite) *
-            (Pbr(4600., 4600.) * (1. - 2.000e-4) +
-             Pic(4600., 4600.) * (1. - 1.000e-4)) /
-            2.0;
+  if (need(57))
+    kgr[57] = (nu_0 / nd_nsite) *
+              (Pbr(4600., 4600.) * (1. - 2.000e-4) +
+               Pic(4600., 4600.) * (1. - 1.000e-4)) /
+              2.0;
 
   // ==========================================================================
   // (4) Surface reactions, single product desorbs  kgr(59..74) → [58..73]
@@ -310,22 +342,27 @@ inline void grain_coef_rates(double nH, double T_K, double T_gr_K,
   // ==========================================================================
 
   // kgr[58]: H(p)+H(p) → H2(g)
-  kgr[58] = (nu_0 / nd_nsite) *
-            (Pbr(500., 500.) * 9.630e-1 + Pic(650., 650.) * 9.640e-2) / 2.0;
+  if (need(58))
+    kgr[58] = (nu_0 / nd_nsite) *
+              (Pbr(500., 500.) * 9.630e-1 + Pic(650., 650.) * 9.640e-2) / 2.0;
   // kgr[59]: H(p)+D(p) → HD(g)
-  kgr[59] = (nu_0 / nd_nsite) *
-            (Pbr(500., 500.) * 9.630e-1 + Pic(650., 650.) * 9.640e-2);
+  if (need(59))
+    kgr[59] = (nu_0 / nd_nsite) *
+              (Pbr(500., 500.) * 9.630e-1 + Pic(650., 650.) * 9.640e-2);
   // kgr[60]: H(p)+O(p) → OH(g)
-  kgr[60] = (nu_0 / nd_nsite) *
-            (Pbr(500., 1500.) * 3.875e-1 + Pic(650., 1420.) * 3.880e-2);
+  if (need(60))
+    kgr[60] = (nu_0 / nd_nsite) *
+              (Pbr(500., 1500.) * 3.875e-1 + Pic(650., 1420.) * 3.880e-2);
   // kgr[61]: H(p)+OH(p) → H2O(g)
-  kgr[61] = (nu_0 / nd_nsite) *
-            (Pbr(500., 4600.) * 2.677e-1 + Pic(650., 4600.) * 2.680e-2);
+  if (need(61))
+    kgr[61] = (nu_0 / nd_nsite) *
+              (Pbr(500., 4600.) * 2.677e-1 + Pic(650., 4600.) * 2.680e-2);
   // kgr[62]: H(p)+O2(p) → HO2(g)
-  kgr[62] = (nu_0 / nd_nsite) *
-            (Pbr(500., 1250.) * 1.380e-2 + Pic(650., 1160.) * 1.400e-3);
+  if (need(62))
+    kgr[62] = (nu_0 / nd_nsite) *
+              (Pbr(500., 1250.) * 1.380e-2 + Pic(650., 1160.) * 1.400e-3);
   // kgr[63]: H(p)+CO(p) → HCO(g)  (with tunneling, Ea=2000K)
-  {
+  if (need(63)) {
     double Pb = Pbr(500., 1200.);
     double Pi = Pic(650., 1300.);
     double mu = mass[0] * mass[9] / (mass[0] + mass[9]);
@@ -334,32 +371,41 @@ inline void grain_coef_rates(double nH, double T_K, double T_gr_K,
     kgr[63] = (nu_0 / nd_nsite) * Pr * (Pb * 6.700e-3 + Pi * 7.000e-4);
   }
   // kgr[64]: H(p)+HO2(p) → H2O2(g)
-  kgr[64] = (nu_0 / nd_nsite) *
-            (Pbr(500., 4000.) * 4.600e-3 + Pic(650., 4000.) * 5.000e-4);
+  if (need(64))
+    kgr[64] = (nu_0 / nd_nsite) *
+              (Pbr(500., 4000.) * 4.600e-3 + Pic(650., 4000.) * 5.000e-4);
   // kgr[65]: H(p)+HCO(p) → H2CO(g)
-  kgr[65] = (nu_0 / nd_nsite) *
-            (Pbr(500., 1600.) * 6.610e-2 + Pic(650., 1600.) * 6.700e-3);
+  if (need(65))
+    kgr[65] = (nu_0 / nd_nsite) *
+              (Pbr(500., 1600.) * 6.610e-2 + Pic(650., 1600.) * 6.700e-3);
   // kgr[66]: H(p)+C(p) → CH(g)
-  kgr[66] = (nu_0 / nd_nsite) *
-            (Pbr(500., 800.) * 8.212e-1 + Pic(650., 800.) * 8.220e-2);
+  if (need(66))
+    kgr[66] = (nu_0 / nd_nsite) *
+              (Pbr(500., 800.) * 8.212e-1 + Pic(650., 800.) * 8.220e-2);
   // kgr[67]: H(p)+CH(p) → CH2(g)
-  kgr[67] = (nu_0 / nd_nsite) *
-            (Pbr(500., 870.) * 7.668e-1 + Pic(650., 870.) * 7.670e-2);
+  if (need(67))
+    kgr[67] = (nu_0 / nd_nsite) *
+              (Pbr(500., 870.) * 7.668e-1 + Pic(650., 870.) * 7.670e-2);
   // kgr[68]: H(p)+CH2(p) → CH3(g)
-  kgr[68] = (nu_0 / nd_nsite) *
-            (Pbr(500., 945.) * 6.937e-1 + Pic(650., 945.) * 6.940e-2);
+  if (need(68))
+    kgr[68] = (nu_0 / nd_nsite) *
+              (Pbr(500., 945.) * 6.937e-1 + Pic(650., 945.) * 6.940e-2);
   // kgr[69]: H(p)+CH3(p) → CH4(g)
-  kgr[69] = (nu_0 / nd_nsite) *
-            (Pbr(500., 1017.) * 5.886e-1 + Pic(650., 1017.) * 5.890e-2);
+  if (need(69))
+    kgr[69] = (nu_0 / nd_nsite) *
+              (Pbr(500., 1017.) * 5.886e-1 + Pic(650., 1017.) * 5.890e-2);
   // kgr[70]: O(p)+O(p) → O2(g)
-  kgr[70] = (nu_0 / nd_nsite) *
-            (Pbr(1500., 1500.) * 6.884e-1 + Pic(1420., 1420.) * 6.890e-2) / 2.0;
+  if (need(70))
+    kgr[70] = (nu_0 / nd_nsite) *
+              (Pbr(1500., 1500.) * 6.884e-1 + Pic(1420., 1420.) * 6.890e-2) /
+              2.0;
   // kgr[71]: O(p)+C(p) → CO(g)
-  kgr[71] = (nu_0 / nd_nsite) *
-            (Pbr(1500., 800.) * 8.659e-1 + Pic(1420., 800.) * 8.660e-2);
+  if (need(71))
+    kgr[71] = (nu_0 / nd_nsite) *
+              (Pbr(1500., 800.) * 8.659e-1 + Pic(1420., 800.) * 8.660e-2);
   // kgr[72]: O(p)+CO(p) → CO2(g)  (with tunneling, Ea=650K)
-  // Same empirical tunneling form as kgr[56] (retained for reproducibility).
-  {
+  // Same empirical tunneling form as kgr[56].
+  if (need(72)) {
     double Pb = Pbr(1500., 1200.);
     double Pi = Pic(1420., 1300.);
     double mu = mass[6] * mass[9] / (mass[6] + mass[9]);
@@ -370,8 +416,10 @@ inline void grain_coef_rates(double nH, double T_K, double T_gr_K,
     kgr[72] = (nu_0 / nd_nsite) * Pr * (Pb * 1.403e-1 + Pi * 1.400e-2);
   }
   // kgr[73]: OH(p)+OH(p) → H2O2(g)
-  kgr[73] = (nu_0 / nd_nsite) *
-            (Pbr(4600., 4600.) * 2.000e-4 + Pic(4600., 4600.) * 1.000e-4) / 2.0;
+  if (need(73))
+    kgr[73] = (nu_0 / nd_nsite) *
+              (Pbr(4600., 4600.) * 2.000e-4 + Pic(4600., 4600.) * 1.000e-4) /
+              2.0;
 
   // ==========================================================================
   // (5) Surface reactions, two products  kgr(75..116) → [74..115]
@@ -385,7 +433,7 @@ inline void grain_coef_rates(double nH, double T_K, double T_gr_K,
   };
 
   // kgr[74]: H(p)+H2O(p) → H2(p)+OH(p)   Ea=9600K
-  {
+  if (need(74)) {
     double Pb = Pbr(500., 4800.);
     double Pi = Pic(650., 5700.);
     double mu = mass[0] * mass[11] / (mass[0] + mass[11]);
@@ -393,13 +441,15 @@ inline void grain_coef_rates(double nH, double T_K, double T_gr_K,
     kgr[74] = (nu_0 / nd_nsite) * Pr * (Pb + Pi);
   }
   // kgr[75]: H(p)+HO2(p) → OH(p)+OH(p)
-  kgr[75] = (nu_0 / nd_nsite) * (Pbr(500., 4000.) * (1. - 3.400e-3) +
-                                 Pic(650., 4000.) * (1. - 4.000e-4));
+  if (need(75))
+    kgr[75] = (nu_0 / nd_nsite) * (Pbr(500., 4000.) * (1. - 3.400e-3) +
+                                   Pic(650., 4000.) * (1. - 4.000e-4));
   // kgr[76]: H(p)+HO2(p) → OH(g)+OH(g)
-  kgr[76] = (nu_0 / nd_nsite) *
-            (Pbr(500., 4000.) * 3.400e-3 + Pic(650., 4000.) * 4.000e-4);
+  if (need(76))
+    kgr[76] = (nu_0 / nd_nsite) *
+              (Pbr(500., 4000.) * 3.400e-3 + Pic(650., 4000.) * 4.000e-4);
   // kgr[77]: H(p)+H2O2(p) → OH(p)+H2O(p)  Ea=1000K
-  {
+  if (need(77)) {
     double Pb = Pbr(500., 6000.);
     double Pi = Pic(650., 6000.);
     double mu = mass[0] * mass[13] / (mass[0] + mass[13]);
@@ -407,7 +457,7 @@ inline void grain_coef_rates(double nH, double T_K, double T_gr_K,
     kgr[77] = (nu_0 / nd_nsite) * Pr * (Pb * 9.716e-1 + Pi * 9.971e-1);
   }
   // kgr[78]: H(p)+H2O2(p) → OH(g)+H2O(p)  Ea=1000K
-  {
+  if (need(78)) {
     double Pb = Pbr(500., 6000.);
     double Pi = Pic(650., 6000.);
     double mu = mass[0] * mass[13] / (mass[0] + mass[13]);
@@ -415,7 +465,7 @@ inline void grain_coef_rates(double nH, double T_K, double T_gr_K,
     kgr[78] = (nu_0 / nd_nsite) * Pr * (Pb * 7.200e-3 + Pi * 8.000e-4);
   }
   // kgr[79]: H(p)+H2O2(p) → OH(g)+H2O(g)  Ea=1000K
-  {
+  if (need(79)) {
     double Pb = Pbr(500., 6000.);
     double Pi = Pic(650., 6000.);
     double mu = mass[0] * mass[13] / (mass[0] + mass[13]);
@@ -423,16 +473,19 @@ inline void grain_coef_rates(double nH, double T_K, double T_gr_K,
     kgr[79] = (nu_0 / nd_nsite) * Pr * (Pb * 2.120e-2 + Pi * 2.100e-3);
   }
   // kgr[80]: H(p)+HCO(p) → H2(p)+CO(p)
-  kgr[80] = (nu_0 / nd_nsite) *
-            (Pbr(500., 1600.) * 8.260e-2 + Pic(650., 1600.) * 9.082e-1);
+  if (need(80))
+    kgr[80] = (nu_0 / nd_nsite) *
+              (Pbr(500., 1600.) * 8.260e-2 + Pic(650., 1600.) * 9.082e-1);
   // kgr[81]: H(p)+HCO(p) → H2(g)+CO(p)
-  kgr[81] = (nu_0 / nd_nsite) *
-            (Pbr(500., 1600.) * 4.827e-1 + Pic(650., 1600.) * 4.820e-2);
+  if (need(81))
+    kgr[81] = (nu_0 / nd_nsite) *
+              (Pbr(500., 1600.) * 4.827e-1 + Pic(650., 1600.) * 4.820e-2);
   // kgr[82]: H(p)+HCO(p) → H2(g)+CO(g)
-  kgr[82] = (nu_0 / nd_nsite) *
-            (Pbr(500., 1600.) * 4.347e-1 + Pic(650., 1600.) * 4.360e-2);
+  if (need(82))
+    kgr[82] = (nu_0 / nd_nsite) *
+              (Pbr(500., 1600.) * 4.347e-1 + Pic(650., 1600.) * 4.360e-2);
   // kgr[83]: H(p)+H2CO(p) → H2(p)+HCO(p)  Ea=2200K
-  {
+  if (need(83)) {
     double Pb = Pbr(500., 3700.);
     double Pi = Pic(650., 3250.);
     double mu = mass[0] * mass[15] / (mass[0] + mass[15]);
@@ -440,7 +493,7 @@ inline void grain_coef_rates(double nH, double T_K, double T_gr_K,
     kgr[83] = (nu_0 / nd_nsite) * Pr * (Pb * 4.948e-1 + Pi * 9.494e-1);
   }
   // kgr[84]: H(p)+H2CO(p) → H2(g)+HCO(p)  Ea=2200K
-  {
+  if (need(84)) {
     double Pb = Pbr(500., 3700.);
     double Pi = Pic(650., 3250.);
     double mu = mass[0] * mass[15] / (mass[0] + mass[15]);
@@ -448,7 +501,7 @@ inline void grain_coef_rates(double nH, double T_K, double T_gr_K,
     kgr[84] = (nu_0 / nd_nsite) * Pr * (Pb * 5.050e-1 + Pi * 5.050e-2);
   }
   // kgr[85]: H(p)+H2CO(p) → H2(g)+HCO(g)  Ea=2200K
-  {
+  if (need(85)) {
     double Pb = Pbr(500., 3700.);
     double Pi = Pic(650., 3250.);
     double mu = mass[0] * mass[15] / (mass[0] + mass[15]);
@@ -456,7 +509,7 @@ inline void grain_coef_rates(double nH, double T_K, double T_gr_K,
     kgr[85] = (nu_0 / nd_nsite) * Pr * (Pb * 2.000e-4 + Pi * 1.000e-4);
   }
   // kgr[86]: H(p)+CO2(p) → OH(p)+CO(p)  Ea=10000K
-  {
+  if (need(86)) {
     double Pb = Pbr(500., 3000.);
     double Pi = Pic(650., 2670.);
     double mu = mass[0] * mass[10] / (mass[0] + mass[10]);
@@ -464,56 +517,73 @@ inline void grain_coef_rates(double nH, double T_K, double T_gr_K,
     kgr[86] = (nu_0 / nd_nsite) * Pr * (Pb + Pi);
   }
   // kgr[87]: H(p)+CH(p) → H2(p)+C(p)
-  kgr[87] = (nu_0 / nd_nsite) *
-            (Pbr(500., 870.) * 2.226e-1 + Pic(650., 870.) * 9.222e-1);
+  if (need(87))
+    kgr[87] = (nu_0 / nd_nsite) *
+              (Pbr(500., 870.) * 2.226e-1 + Pic(650., 870.) * 9.222e-1);
   // kgr[88]: H(p)+CH(p) → H2(g)+C(p)
-  kgr[88] = (nu_0 / nd_nsite) *
-            (Pbr(500., 870.) * 3.859e-1 + Pic(650., 870.) * 3.865e-2);
+  if (need(88))
+    kgr[88] = (nu_0 / nd_nsite) *
+              (Pbr(500., 870.) * 3.859e-1 + Pic(650., 870.) * 3.865e-2);
   // kgr[89]: H(p)+CH(p) → H2(g)+C(g)
-  kgr[89] = (nu_0 / nd_nsite) *
-            (Pbr(500., 870.) * 3.915e-1 + Pic(650., 870.) * 3.915e-2);
+  if (need(89))
+    kgr[89] = (nu_0 / nd_nsite) *
+              (Pbr(500., 870.) * 3.915e-1 + Pic(650., 870.) * 3.915e-2);
   // kgr[90]: H(p)+CH2(p) → H2(p)+CH(p)
-  kgr[90] = (nu_0 / nd_nsite) *
-            (Pbr(500., 945.) * 9.554e-1 + Pic(650., 945.) * 9.955e-1);
+  if (need(90))
+    kgr[90] = (nu_0 / nd_nsite) *
+              (Pbr(500., 945.) * 9.554e-1 + Pic(650., 945.) * 9.955e-1);
   // kgr[91]: H(p)+CH2(p) → H2(g)+CH(p)
-  kgr[91] = (nu_0 / nd_nsite) *
-            (Pbr(500., 945.) * 4.452e-2 + Pic(650., 945.) * 4.452e-3);
+  if (need(91))
+    kgr[91] = (nu_0 / nd_nsite) *
+              (Pbr(500., 945.) * 4.452e-2 + Pic(650., 945.) * 4.452e-3);
   // kgr[92]: H(p)+CH2(p) → H2(g)+CH(g)
-  kgr[92] = (nu_0 / nd_nsite) *
-            (Pbr(500., 945.) * 8.000e-5 + Pic(650., 945.) * 4.800e-5);
+  if (need(92))
+    kgr[92] = (nu_0 / nd_nsite) *
+              (Pbr(500., 945.) * 8.000e-5 + Pic(650., 945.) * 4.800e-5);
   // kgr[93]: H(p)+CH3(p) → H2(p)+CH2(p)
-  kgr[93] = (nu_0 / nd_nsite) * (Pbr(500., 1017.) + Pic(650., 1017.));
+  if (need(93))
+    kgr[93] = (nu_0 / nd_nsite) * (Pbr(500., 1017.) + Pic(650., 1017.));
   // kgr[94]: H(p)+CH4(p) → H2(p)+CH3(p)
-  kgr[94] = (nu_0 / nd_nsite) * (Pbr(500., 1090.) + Pic(650., 1090.));
+  if (need(94))
+    kgr[94] = (nu_0 / nd_nsite) * (Pbr(500., 1090.) + Pic(650., 1090.));
   // kgr[95]: O(p)+OH(p) → H(p)+O2(p)
-  kgr[95] = (nu_0 / nd_nsite) *
-            (Pbr(1500., 4600.) * 4.547e-1 + Pic(1420., 4600.) * 9.454e-1);
+  if (need(95))
+    kgr[95] = (nu_0 / nd_nsite) *
+              (Pbr(1500., 4600.) * 4.547e-1 + Pic(1420., 4600.) * 9.454e-1);
   // kgr[96]: O(p)+OH(p) → H(g)+O2(p)
-  kgr[96] = (nu_0 / nd_nsite) *
-            (Pbr(1500., 4600.) * 5.264e-1 + Pic(1420., 4600.) * 5.260e-2);
+  if (need(96))
+    kgr[96] = (nu_0 / nd_nsite) *
+              (Pbr(1500., 4600.) * 5.264e-1 + Pic(1420., 4600.) * 5.260e-2);
   // kgr[97]: O(p)+OH(p) → H(g)+O2(g)
-  kgr[97] = (nu_0 / nd_nsite) *
-            (Pbr(1500., 4600.) * 1.890e-2 + Pic(1420., 4600.) * 2.000e-3);
+  if (need(97))
+    kgr[97] = (nu_0 / nd_nsite) *
+              (Pbr(1500., 4600.) * 1.890e-2 + Pic(1420., 4600.) * 2.000e-3);
   // kgr[98]: O(p)+HO2(p) → O2(p)+OH(p)
-  kgr[98] = (nu_0 / nd_nsite) *
-            (Pbr(1500., 4000.) * 8.265e-1 + Pic(1420., 4000.) * 9.826e-1);
+  if (need(98))
+    kgr[98] = (nu_0 / nd_nsite) *
+              (Pbr(1500., 4000.) * 8.265e-1 + Pic(1420., 4000.) * 9.826e-1);
   // kgr[99]: O(p)+HO2(p) → O2(g)+OH(p)
-  kgr[99] = (nu_0 / nd_nsite) *
-            (Pbr(1500., 4000.) * 1.516e-1 + Pic(1420., 4000.) * 1.510e-2);
+  if (need(99))
+    kgr[99] = (nu_0 / nd_nsite) *
+              (Pbr(1500., 4000.) * 1.516e-1 + Pic(1420., 4000.) * 1.510e-2);
   // kgr[100]: O(p)+HO2(p) → O2(g)+OH(g)
-  kgr[100] = (nu_0 / nd_nsite) *
-             (Pbr(1500., 4000.) * 2.190e-2 + Pic(1420., 4000.) * 2.300e-3);
+  if (need(100))
+    kgr[100] = (nu_0 / nd_nsite) *
+               (Pbr(1500., 4000.) * 2.190e-2 + Pic(1420., 4000.) * 2.300e-3);
   // kgr[101]: O(p)+HCO(p) → H(p)+CO2(p)
-  kgr[101] = (nu_0 / nd_nsite) *
-             (Pbr(1500., 1600.) * 1.141e-1 + Pic(1420., 1600.) * 9.114e-1);
+  if (need(101))
+    kgr[101] = (nu_0 / nd_nsite) *
+               (Pbr(1500., 1600.) * 1.141e-1 + Pic(1420., 1600.) * 9.114e-1);
   // kgr[102]: O(p)+HCO(p) → H(g)+CO2(p)
-  kgr[102] = (nu_0 / nd_nsite) *
-             (Pbr(1500., 1600.) * 8.348e-1 + Pic(1420., 1600.) * 8.340e-2);
+  if (need(102))
+    kgr[102] = (nu_0 / nd_nsite) *
+               (Pbr(1500., 1600.) * 8.348e-1 + Pic(1420., 1600.) * 8.340e-2);
   // kgr[103]: O(p)+HCO(p) → H(g)+CO2(g)
-  kgr[103] = (nu_0 / nd_nsite) *
-             (Pbr(1500., 1600.) * 5.110e-2 + Pic(1420., 1600.) * 5.200e-3);
+  if (need(103))
+    kgr[103] = (nu_0 / nd_nsite) *
+               (Pbr(1500., 1600.) * 5.110e-2 + Pic(1420., 1600.) * 5.200e-3);
   // kgr[104]: O(p)+H2CO(p) → H2(p)+CO2(p)  Ea=335K
-  {
+  if (need(104)) {
     double Pb = Pbr(1500., 3700.);
     double Pi = Pic(1420., 3250.);
     double mu = mass[6] * mass[15] / (mass[6] + mass[15]);
@@ -521,7 +591,7 @@ inline void grain_coef_rates(double nH, double T_K, double T_gr_K,
     kgr[104] = (nu_0 / nd_nsite) * Pr * (Pb * 7.310e-2 + Pi * 9.073e-1);
   }
   // kgr[105]: O(p)+H2CO(p) → H2(g)+CO2(p)  Ea=335K
-  {
+  if (need(105)) {
     double Pb = Pbr(1500., 3700.);
     double Pi = Pic(1420., 3250.);
     double mu = mass[6] * mass[15] / (mass[6] + mass[15]);
@@ -529,7 +599,7 @@ inline void grain_coef_rates(double nH, double T_K, double T_gr_K,
     kgr[105] = (nu_0 / nd_nsite) * Pr * (Pb * 8.901e-1 + Pi * 8.900e-2);
   }
   // kgr[106]: O(p)+H2CO(p) → H2(g)+CO2(g)  Ea=335K
-  {
+  if (need(106)) {
     double Pb = Pbr(1500., 3700.);
     double Pi = Pic(1420., 3250.);
     double mu = mass[6] * mass[15] / (mass[6] + mass[15]);
@@ -537,7 +607,7 @@ inline void grain_coef_rates(double nH, double T_K, double T_gr_K,
     kgr[106] = (nu_0 / nd_nsite) * Pr * (Pb * 3.680e-2 + Pi * 3.700e-3);
   }
   // kgr[107]: H2(p)+OH(p) → H(p)+H2O(p)  Ea=2100K
-  {
+  if (need(107)) {
     double Pb = Pbr(300., 4600.);
     double Pi = Pic(500., 4600.);
     double mu = mass[2] * mass[8] / (mass[2] + mass[8]);
@@ -545,7 +615,7 @@ inline void grain_coef_rates(double nH, double T_K, double T_gr_K,
     kgr[107] = (nu_0 / nd_nsite) * Pr * (Pb * 5.948e-1 + Pi * 9.594e-1);
   }
   // kgr[108]: H2(p)+OH(p) → H(g)+H2O(p)  Ea=2100K
-  {
+  if (need(108)) {
     double Pb = Pbr(300., 4600.);
     double Pi = Pic(500., 4600.);
     double mu = mass[2] * mass[8] / (mass[2] + mass[8]);
@@ -553,7 +623,7 @@ inline void grain_coef_rates(double nH, double T_K, double T_gr_K,
     kgr[108] = (nu_0 / nd_nsite) * Pr * (Pb * 4.052e-1 + Pi * 4.060e-2);
   }
   // kgr[109]: OH(p)+CO(p) → H(p)+CO2(p)  Ea=400K
-  {
+  if (need(109)) {
     double Pb = Pbr(4600., 1200.);
     double Pi = Pic(4600., 1300.);
     double mu = mass[8] * mass[9] / (mass[8] + mass[9]);
@@ -561,7 +631,7 @@ inline void grain_coef_rates(double nH, double T_K, double T_gr_K,
     kgr[109] = (nu_0 / nd_nsite) * Pr * (Pb * 4.205e-1 + Pi * 9.420e-1);
   }
   // kgr[110]: OH(p)+CO(p) → H(g)+CO2(p)  Ea=400K
-  {
+  if (need(110)) {
     double Pb = Pbr(4600., 1200.);
     double Pi = Pic(4600., 1300.);
     double mu = mass[8] * mass[9] / (mass[8] + mass[9]);
@@ -569,7 +639,7 @@ inline void grain_coef_rates(double nH, double T_K, double T_gr_K,
     kgr[110] = (nu_0 / nd_nsite) * Pr * (Pb * 5.794e-1 + Pi * 5.794e-2);
   }
   // kgr[111]: OH(p)+CO(p) → H(g)+CO2(g)  Ea=400K
-  {
+  if (need(111)) {
     double Pb = Pbr(4600., 1200.);
     double Pi = Pic(4600., 1300.);
     double mu = mass[8] * mass[9] / (mass[8] + mass[9]);
@@ -577,16 +647,19 @@ inline void grain_coef_rates(double nH, double T_K, double T_gr_K,
     kgr[111] = (nu_0 / nd_nsite) * Pr * (Pb * 1.000e-4 + Pi * 6.000e-5);
   }
   // kgr[112]: OH(p)+HCO(p) → H2(p)+CO2(p)
-  kgr[112] = (nu_0 / nd_nsite) *
-             (Pbr(4600., 1600.) * 8.063e-2 + Pic(4600., 1600.) * 9.080e-1);
+  if (need(112))
+    kgr[112] = (nu_0 / nd_nsite) *
+               (Pbr(4600., 1600.) * 8.063e-2 + Pic(4600., 1600.) * 9.080e-1);
   // kgr[113]: OH(p)+HCO(p) → H2(g)+CO2(p)
-  kgr[113] = (nu_0 / nd_nsite) *
-             (Pbr(4600., 1600.) * 8.936e-1 + Pic(4600., 1600.) * 8.936e-2);
+  if (need(113))
+    kgr[113] = (nu_0 / nd_nsite) *
+               (Pbr(4600., 1600.) * 8.936e-1 + Pic(4600., 1600.) * 8.936e-2);
   // kgr[114]: OH(p)+HCO(p) → H2(g)+CO2(g)
-  kgr[114] = (nu_0 / nd_nsite) *
-             (Pbr(4600., 1600.) * 2.577e-2 + Pic(4600., 1600.) * 2.640e-3);
+  if (need(114))
+    kgr[114] = (nu_0 / nd_nsite) *
+               (Pbr(4600., 1600.) * 2.577e-2 + Pic(4600., 1600.) * 2.640e-3);
   // kgr[115]: H2(p)+HO2(p) → H(p)+H2O2(p)  Ea=5000K
-  {
+  if (need(115)) {
     double Pb = Pbr(300., 4000.);
     double Pi = Pic(500., 4000.);
     double mu = mass[2] * mass[12] / (mass[2] + mass[12]);
@@ -613,10 +686,11 @@ inline void grain_coef_rates(double nH, double T_K, double T_gr_K,
   };
 
   // kgr[116]: H(p) → H(c)
-  kgr[116] = CT_rate(1.0e4, 500.0, 200.0, mass[0]) * (1.0 - f_chem);
+  if (need(116))
+    kgr[116] = CT_rate(1.0e4, 500.0, 200.0, mass[0]) * (1.0 - f_chem);
 
   // kgr[117]: H(g) + H(c) → H2(g)
-  {
+  if (need(117)) {
     double m_red = m_p * mass[0];
     double P =
         std::exp(-(2.0e-8 / h_b) * std::sqrt(2.0 * m_red * k_B * 1.0e3)) +
@@ -625,16 +699,17 @@ inline void grain_coef_rates(double nH, double T_K, double T_gr_K,
   }
 
   // kgr[118]: H(p) + H(c) → H2(g)
-  kgr[118] = CT_rate(1.0e4, 500.0, 200.0, mass[0]) / nd_nsite;
+  if (need(118)) kgr[118] = CT_rate(1.0e4, 500.0, 200.0, mass[0]) / nd_nsite;
 
   // kgr[119]: D(p) → D(c)
-  kgr[119] = CT_rate(1.0e4, 558.0, 200.0, mass[3]) * (1.0 - f_chem);
+  if (need(119))
+    kgr[119] = CT_rate(1.0e4, 558.0, 200.0, mass[3]) * (1.0 - f_chem);
 
   // kgr[120]: H(g) + D(c) → HD(g)  [same rate as 118]
-  kgr[120] = kgr[117];
+  if (need(120)) kgr[120] = kgr[117];
 
   // kgr[121]: D(g) + H(c) → HD(g)
-  {
+  if (need(121)) {
     double m_red = m_p * mass[3];
     double P =
         std::exp(-(2.0e-8 / h_b) * std::sqrt(2.0 * m_red * k_B * 1.0e3)) +
@@ -643,22 +718,22 @@ inline void grain_coef_rates(double nH, double T_K, double T_gr_K,
   }
 
   // kgr[122]: H(p) + D(c) → HD(g)  [same rate as 119]
-  kgr[122] = kgr[118];
+  if (need(122)) kgr[122] = kgr[118];
 
   // kgr[123]: D(p) + H(c) → HD(g)
-  kgr[123] = CT_rate(1.0e4, 558.0, 200.0, mass[3]) / nd_nsite;
+  if (need(123)) kgr[123] = CT_rate(1.0e4, 558.0, 200.0, mass[3]) / nd_nsite;
 
   // kgr[124]: H(g) + H(p) → H2(g)  = kgr[0] / nd_nsite
-  kgr[124] = kgr[0] / nd_nsite;
+  if (need(124)) kgr[124] = kgr[0] / nd_nsite;
 
   // kgr[125]: H(g) + D(p) → HD(g)  = kgr[0] / nd_nsite
-  kgr[125] = kgr[0] / nd_nsite;
+  if (need(125)) kgr[125] = kgr[0] / nd_nsite;
 
   // kgr[126]: D(g) + H(p) → HD(g)  = kgr[3] / nd_nsite
-  kgr[126] = kgr[3] / nd_nsite;
+  if (need(126)) kgr[126] = kgr[3] / nd_nsite;
 
   // kgr[127]: H(g) + H(g) → H2(g)  (simple formula, Cazaux&Tielens)
-  {
+  if (need(127)) {
     double m_red = m_p * mass[0];
     double Ptun =
         std::exp(-(6.0e-8 / h_b) * std::sqrt(2.0 * m_red * k_B * 300.0));
@@ -672,7 +747,7 @@ inline void grain_coef_rates(double nH, double T_K, double T_gr_K,
   }
 
   // kgr[128]: H(g) + D(g) → HD(g)
-  {
+  if (need(128)) {
     double m_red = m_p * mass[3];
     double Ptun =
         std::exp(-(6.0e-8 / h_b) * std::sqrt(2.0 * m_red * k_B * 358.0));
@@ -698,59 +773,77 @@ inline void grain_coef_rates(double nH, double T_K, double T_gr_K,
   };
 
   // kgr[130]: H(p) → H(g)
-  kgr[130] = CR(nu_0 * (f_bare * std::exp(-500.0 / T_cr_eff) +
-                        f_ice * std::exp(-650.0 / T_cr_eff)));
+  if (need(130))
+    kgr[130] = CR(nu_0 * (f_bare * std::exp(-500.0 / T_cr_eff) +
+                          f_ice * std::exp(-650.0 / T_cr_eff)));
   // kgr[131]: H(c) → H(g)
-  kgr[131] = CR(nu_0 * std::exp(-1.0e4 / T_cr_eff));
+  if (need(131)) kgr[131] = CR(nu_0 * std::exp(-1.0e4 / T_cr_eff));
   // kgr[132]: H2(p) → H2(g)
-  kgr[132] = CR(nu_0 * (f_h2b * (f_bare * std::exp(-300.0 / T_cr_eff) +
-                                 f_ice * std::exp(-500.0 / T_cr_eff)) +
-                        f_h2i * std::exp(-100.0 / T_cr_eff)));
+  if (need(132))
+    kgr[132] = CR(nu_0 * (f_h2b * (f_bare * std::exp(-300.0 / T_cr_eff) +
+                                   f_ice * std::exp(-500.0 / T_cr_eff)) +
+                          f_h2i * std::exp(-100.0 / T_cr_eff)));
   // kgr[133]: D(p) → D(g)
-  kgr[133] = CR(nu_0 * (f_bare * std::exp(-558.0 / T_cr_eff) +
-                        f_ice * std::exp(-708.0 / T_cr_eff)));
+  if (need(133))
+    kgr[133] = CR(nu_0 * (f_bare * std::exp(-558.0 / T_cr_eff) +
+                          f_ice * std::exp(-708.0 / T_cr_eff)));
   // kgr[134]: D(c) → D(g)
-  kgr[134] = CR(nu_0 * std::exp(-1.0e4 / T_cr_eff));
+  if (need(134)) kgr[134] = CR(nu_0 * std::exp(-1.0e4 / T_cr_eff));
   // kgr[135]: HD(p) → HD(g)
-  kgr[135] = CR(nu_0 * (f_h2b * (f_bare * std::exp(-358.0 / T_cr_eff) +
-                                 f_ice * std::exp(-558.0 / T_cr_eff)) +
-                        f_h2i * std::exp(-158.0 / T_cr_eff)));
+  if (need(135))
+    kgr[135] = CR(nu_0 * (f_h2b * (f_bare * std::exp(-358.0 / T_cr_eff) +
+                                   f_ice * std::exp(-558.0 / T_cr_eff)) +
+                          f_h2i * std::exp(-158.0 / T_cr_eff)));
   // kgr[136]: O(p) → O(g)
-  kgr[136] = CR(nu_0 * (f_bare * std::exp(-1500.0 / T_cr_eff) +
-                        f_ice * std::exp(-1420.0 / T_cr_eff)));
+  if (need(136))
+    kgr[136] = CR(nu_0 * (f_bare * std::exp(-1500.0 / T_cr_eff) +
+                          f_ice * std::exp(-1420.0 / T_cr_eff)));
   // kgr[137]: O2(p) → O2(g)
-  kgr[137] = CR(nu_0 * (f_bare * std::exp(-1250.0 / T_cr_eff) +
-                        f_ice * std::exp(-1160.0 / T_cr_eff)));
+  if (need(137))
+    kgr[137] = CR(nu_0 * (f_bare * std::exp(-1250.0 / T_cr_eff) +
+                          f_ice * std::exp(-1160.0 / T_cr_eff)));
   // kgr[138]: OH(p) → OH(g)
-  kgr[138] = CR(nu_0 * std::exp(-4600.0 / T_cr_eff));
+  if (need(138)) kgr[138] = CR(nu_0 * std::exp(-4600.0 / T_cr_eff));
   // kgr[139]: CO(p) → CO(g)
-  kgr[139] = CR(nu_0 * (f_bare * std::exp(-1200.0 / T_cr_eff) +
-                        f_ice * std::exp(-1300.0 / T_cr_eff)));
+  if (need(139))
+    kgr[139] = CR(nu_0 * (f_bare * std::exp(-1200.0 / T_cr_eff) +
+                          f_ice * std::exp(-1300.0 / T_cr_eff)));
   // kgr[140]: CO2(p) → CO2(g)
-  kgr[140] = CR(nu_0 * (f_bare * std::exp(-3000.0 / T_cr_eff) +
-                        f_ice * std::exp(-2670.0 / T_cr_eff)));
+  if (need(140))
+    kgr[140] = CR(nu_0 * (f_bare * std::exp(-3000.0 / T_cr_eff) +
+                          f_ice * std::exp(-2670.0 / T_cr_eff)));
   // kgr[141]: H2O(p) → H2O(g)
-  kgr[141] = CR(nu_0 * (f_bare * std::exp(-4800.0 / T_cr_eff) +
-                        f_ice * std::exp(-5700.0 / T_cr_eff)));
+  if (need(141))
+    kgr[141] = CR(nu_0 * (f_bare * std::exp(-4800.0 / T_cr_eff) +
+                          f_ice * std::exp(-5700.0 / T_cr_eff)));
   // kgr[142]: HO2(p) → O(g)+OH(g)
-  kgr[142] = CR(nu_0 * std::exp(-4000.0 / T_cr_eff));
+  if (need(142)) kgr[142] = CR(nu_0 * std::exp(-4000.0 / T_cr_eff));
   // kgr[143]: H2O2(p) → H2O2(g)
-  kgr[143] = CR(nu_0 * std::exp(-6000.0 / T_cr_eff));
+  if (need(143)) kgr[143] = CR(nu_0 * std::exp(-6000.0 / T_cr_eff));
   // kgr[144]: HCO(p) → HCO(g)
-  kgr[144] = CR(nu_0 * std::exp(-1600.0 / T_cr_eff));
+  if (need(144)) kgr[144] = CR(nu_0 * std::exp(-1600.0 / T_cr_eff));
   // kgr[145]: H2CO(p) → H2CO(g)
-  kgr[145] = CR(nu_0 * (f_bare * std::exp(-3700.0 / T_cr_eff) +
-                        f_ice * std::exp(-3250.0 / T_cr_eff)));
+  if (need(145))
+    kgr[145] = CR(nu_0 * (f_bare * std::exp(-3700.0 / T_cr_eff) +
+                          f_ice * std::exp(-3250.0 / T_cr_eff)));
   // kgr[146]: C(p) → C(g)
-  kgr[146] = CR(nu_0 * std::exp(-800.0 / T_cr_eff));
+  if (need(146)) kgr[146] = CR(nu_0 * std::exp(-800.0 / T_cr_eff));
   // kgr[147]: CH(p) → CH(g)
-  kgr[147] = CR(nu_0 * std::exp(-870.0 / T_cr_eff));
+  if (need(147)) kgr[147] = CR(nu_0 * std::exp(-870.0 / T_cr_eff));
   // kgr[148]: CH2(p) → CH2(g)
-  kgr[148] = CR(nu_0 * std::exp(-945.0 / T_cr_eff));
+  if (need(148)) kgr[148] = CR(nu_0 * std::exp(-945.0 / T_cr_eff));
   // kgr[149]: CH3(p) → CH3(g)
-  kgr[149] = CR(nu_0 * std::exp(-1017.0 / T_cr_eff));
+  if (need(149)) kgr[149] = CR(nu_0 * std::exp(-1017.0 / T_cr_eff));
   // kgr[150]: CH4(p) → CH4(g)
-  kgr[150] = CR(nu_0 * std::exp(-1090.0 / T_cr_eff));
+  if (need(150)) kgr[150] = CR(nu_0 * std::exp(-1090.0 / T_cr_eff));
+}
+
+inline void grain_coef_rates(double nH, double T_K, double T_gr_K,
+                             double Z_metal, double JH2, double JH2O,
+                             double Jtot, double zeta, double T_cr_eff,
+                             std::array<double, 151>& kgr) {
+  grain_coef_rates(nH, T_K, T_gr_K, Z_metal, JH2, JH2O, Jtot, zeta, T_cr_eff,
+                   kgr, [](int) { return true; });
 }
 
 }  // namespace arche

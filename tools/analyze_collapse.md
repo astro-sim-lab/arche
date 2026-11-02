@@ -81,16 +81,20 @@ The `[_fret<fr>]` suffix appears between `CR<tag>` and `[_JLW<jlw>]` when f_ret 
 
 ## Lyman-Werner self-shielding model
 
-When `J_LW21 > 0`, the operator-split LW block in `chemistry.h` applies:
+When `J_LW21 > 0`, the LW photodissociation and photodetachment rates use the following self-shielding:
 
 | Species | Self-shielding | Reference |
 |---|---|---|
-| H₂ | WG2019 eq. 7–8: α(n,T)-dependent exponent | Wolcott-Green & Haiman (2019) MNRAS 484, 2467 |
+| H₂ | WG2019 eq. 7–8: α(n,T)-dependent exponent (α at 8000 K above 8000 K) | Wolcott-Green & Haiman (2019) MNRAS 484, 2467 |
 | HD | WG2011 functional form, α = 2 fixed | Wolcott-Green & Haiman (2011) |
 | H⁻ | None (continuum absorption, no band structure) | Tegmark et al. (1997) |
 
 The WG2019 formula uses the **gas** density and temperature (not source temperature) to compute α(n,T), capturing the weakening of self-shielding at high n and T where excited H₂ rovibrational states are significantly populated.
 Valid range: n ≤ 10⁷ cm⁻³, T ≤ 8000 K, N(H₂) ≤ 10¹⁷ cm⁻².
+Above 8000 K, α keeps its 8000 K value; the Doppler parameter still follows the gas temperature.
+Extrapolating α linearly in log T would make it negative at high density from T ≈ 1.1×10⁴ K.
+A negative α gives f_sh > 1, growing with N(H₂), which drives a period-2 oscillation of the H₂ abundance in the Saha regime.
+At 8000 K, α ≥ 0.13 at every density, so f_sh ≤ 1 and stays continuous in T.
 
 ---
 

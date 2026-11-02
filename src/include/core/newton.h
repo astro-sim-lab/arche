@@ -7,9 +7,9 @@
 //
 // A dense Gauss-Jordan linear solve, the linear-solve policies, and a
 // dimension-generic Newton-Raphson driver.  These carry no chemistry or model
-// knowledge, so they live in the foundation layer: both the implicit chemistry
-// integrator (solve/chemreact.h) and the per-model Saha-equilibrium solvers
-// (models/*/equilibrium.h) depend on them without depending on each other.
+// knowledge, so they live in the foundation layer: the per-model
+// Saha-equilibrium solvers (models/*/equilibrium.h) depend on them without
+// depending on the chemistry integrator.
 //
 // Optional Eigen support: define ARCHE_USE_EIGEN before including, or add
 // -DARCHE_USE_EIGEN to the compiler flags.

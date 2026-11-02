@@ -23,6 +23,7 @@
 // Index convention: 0-based k_rxn[N] = 1-based reaction id N+1.
 // All rate coefficients in CGS (cm³/s or cm⁶/s for 3-body).
 // ---------------------------------------------------------------------------
+#include <algorithm>
 #include <array>
 #include <cmath>
 
@@ -49,26 +50,59 @@ namespace arche {
 namespace ratelaw {
 namespace prim {
 
+// Collisional ionisation fits (r0, r2, r4) below the temperature T* at which the fit's
+// Arrhenius prefactor p(T) = k(T) exp(dE/kT) is smallest. Below T* the 8th-order
+// polynomials in ln T_eV make p rise without bound -- by 1e17 (H), 1e28 (He) and 1e112
+// (He+) at 1000 K -- and the reverse three-body recombination built from them by detailed
+// balance, k_rev = k exp(+dE/kT) ..., inherits the same factor (5e83 cm^6 s^-1 for He++ at
+// 1000 K), far outside double precision for any implicit solve. Below T* the prefactor is
+// held at p(T*): k(T) = k(T*) exp(-dE/k (1/T - 1/T*)). T* is where dp/dT = 0, so k is
+// continuous in value and in d ln k / dT there; at and above T* the fit is evaluated
+// unchanged. dE is the reaction's |delE| in the reaction table (reactions.h), so the
+// exponential cancels in the detailed-balance reverse. The 1000 K gate still applies.
+// (Same construction as the LiH radiative association fit, k_H_Li_to_LiH.)
+namespace ioncap {
+constexpr double kTstar_H =
+    11958.9;  // r0, H + e -> H+ + 2e   (|delE| of reaction 1)
+constexpr double kTstar_He = 15511.5;   // r2, He + e -> He+ + 2e (reaction 3)
+constexpr double kTstar_Hep = 85253.6;  // r4, He+ + e -> He++ + 2e (reaction 5)
+constexpr double kEoverK_H = 2.17871e-11 / phys::k_B;
+constexpr double kEoverK_He = 3.93933e-11 / phys::k_B;
+constexpr double kEoverK_Hep = 8.71859e-11 / phys::k_B;
+// ln T_eV at which a fit is evaluated: the cell's own above T*, T*'s below it.
+inline double ln_T_eV(const PrimRateContext& c, double T_star) {
+  return c.T_K >= T_star ? c.lnT_eV : std::log(phys::k_B_eV * T_star);
+}
+// Factor carrying k(T*) down to T along exp(-dE/kT); 1 at and above T*.
+inline double below(const PrimRateContext& c, double T_star, double E_over_k) {
+  return c.T_K >= T_star ? 1.0
+                         : std::exp(-E_over_k * (1.0 / c.T_K - 1.0 / T_star));
+}
+}  // namespace ioncap
+
 // k_rxn[0] H + e -> H+ + 2e
 inline double r0_H_e_to_Hp_2e(const PrimRateContext& c) {
   if (c.T_K < 1000.0) return 0.0;
-  const double lnT_eV = c.lnT_eV;
-  return std::exp(
-      -32.71396786 +
-      lnT_eV *
-          (13.536556 +
-           lnT_eV *
-               (-5.73932875 +
-                lnT_eV *
-                    (1.56315498 +
-                     lnT_eV *
-                         (-0.2877056 +
-                          lnT_eV *
-                              (3.48255977e-2 +
-                               lnT_eV *
-                                   (-2.63197617e-3 +
-                                    lnT_eV * (1.11954395e-4 +
-                                              lnT_eV * (-2.03914985e-6)))))))));
+  const double lnT_eV = ioncap::ln_T_eV(c, ioncap::kTstar_H);
+  return ioncap::below(c, ioncap::kTstar_H, ioncap::kEoverK_H) *
+         std::exp(
+             -32.71396786 +
+             lnT_eV *
+                 (13.536556 +
+                  lnT_eV *
+                      (-5.73932875 +
+                       lnT_eV *
+                           (1.56315498 +
+                            lnT_eV *
+                                (-0.2877056 +
+                                 lnT_eV *
+                                     (3.48255977e-2 +
+                                      lnT_eV *
+                                          (-2.63197617e-3 +
+                                           lnT_eV *
+                                               (1.11954395e-4 +
+                                                lnT_eV *
+                                                    (-2.03914985e-6)))))))));
 }
 
 // k_rxn[1] H+ + e -> H + ph.  (case B)
@@ -80,23 +114,26 @@ inline double r1_Hp_rec_caseB(const PrimRateContext& c) {
 // k_rxn[2] He + e -> He+ + 2e
 inline double r2_He_e_to_Hep_2e(const PrimRateContext& c) {
   if (c.T_K < 1000.0) return 0.0;
-  const double lnT_eV = c.lnT_eV;
-  return std::exp(
-      -44.09864886 +
-      lnT_eV *
-          (23.91596563 +
-           lnT_eV *
-               (-10.7532302 +
-                lnT_eV *
-                    (3.05803875 +
-                     lnT_eV *
-                         (-0.56851189 +
-                          lnT_eV *
-                              (6.79539123e-2 +
-                               lnT_eV *
-                                   (-5.00905610e-3 +
-                                    lnT_eV * (2.06723616e-4 +
-                                              lnT_eV * (-3.64916141e-6)))))))));
+  const double lnT_eV = ioncap::ln_T_eV(c, ioncap::kTstar_He);
+  return ioncap::below(c, ioncap::kTstar_He, ioncap::kEoverK_He) *
+         std::exp(
+             -44.09864886 +
+             lnT_eV *
+                 (23.91596563 +
+                  lnT_eV *
+                      (-10.7532302 +
+                       lnT_eV *
+                           (3.05803875 +
+                            lnT_eV *
+                                (-0.56851189 +
+                                 lnT_eV *
+                                     (6.79539123e-2 +
+                                      lnT_eV *
+                                          (-5.00905610e-3 +
+                                           lnT_eV *
+                                               (2.06723616e-4 +
+                                                lnT_eV *
+                                                    (-3.64916141e-6)))))))));
 }
 
 // k_rxn[3] He+ + e -> He + ph.  (optically thick)
@@ -120,23 +157,26 @@ inline double r3_Hep_rec(const PrimRateContext& c) {
 // k_rxn[4] He+ + e -> He++ + 2e
 inline double r4_Hep_e_to_Hepp_2e(const PrimRateContext& c) {
   if (c.T_K < 1000.0) return 0.0;
-  const double lnT_eV = c.lnT_eV;
-  return std::exp(
-      -68.71040990 +
-      lnT_eV *
-          (43.93347633 +
-           lnT_eV *
-               (-18.4806699 +
-                lnT_eV *
-                    (4.70162649 +
-                     lnT_eV *
-                         (-0.76924663 +
-                          lnT_eV *
-                              (8.113042e-2 +
-                               lnT_eV *
-                                   (-5.32402063e-3 +
-                                    lnT_eV * (1.97570531e-4 +
-                                              lnT_eV * (-3.16558106e-6)))))))));
+  const double lnT_eV = ioncap::ln_T_eV(c, ioncap::kTstar_Hep);
+  return ioncap::below(c, ioncap::kTstar_Hep, ioncap::kEoverK_Hep) *
+         std::exp(
+             -68.71040990 +
+             lnT_eV *
+                 (43.93347633 +
+                  lnT_eV *
+                      (-18.4806699 +
+                       lnT_eV *
+                           (4.70162649 +
+                            lnT_eV *
+                                (-0.76924663 +
+                                 lnT_eV *
+                                     (8.113042e-2 +
+                                      lnT_eV *
+                                          (-5.32402063e-3 +
+                                           lnT_eV *
+                                               (1.97570531e-4 +
+                                                lnT_eV *
+                                                    (-3.16558106e-6)))))))));
 }
 
 // k_rxn[5] He++ + e -> He+ + ph.  (case B)
@@ -795,9 +835,28 @@ inline double r116_H_LiHp_to_H2_Lip(const PrimRateContext& c) {
   return 8.7e-10 * std::pow(c.T_K, 0.040) * std::exp(c.T_K / 5.92e8);
 }
 
+// H + Li -> LiH + γ, as a function of T alone so the metal network
+// (reaction_metal.h, k_rxn[817]) evaluates the same law.
+//
+// Fit: Bovino et al. (2011, ApJ 731, 107) Table 1 reaction (3), used by
+// Nakauchi et al. (2019) as Li5. The cubic term makes it grow without bound
+// above its minimum at T* = sqrt(13193^3 / (3 * 4065)) = 13722.2 K: 1e-8
+// cm^3 s^-1 at 4.4e4 K and overflow near 1.2e5 K. Such values make the Li rows
+// of the Newton system stiff enough (h k n ~ 1e15) that the solve fails at
+// nH ~ 2e21 cm^-3, T ~ 4.7e4 K when the Saha branch is not taken. The paper
+// states no validity range; the quantal rates it fits (Bennett et al. 2003)
+// stop at 1e4 K and decline there. The fit is therefore held at T*, where its
+// slope is zero: the rate is C1-continuous and unchanged below T*. The reverse
+// rate follows by detailed balance, so equilibrium LiH/Li is unaffected.
+inline double k_H_Li_to_LiH(double T_K) {
+  constexpr double kTStar = 13722.222006600898;  // K, the fit's minimum
+  const double T = std::min(T_K, kTStar);
+  return 4.0e-20 * std::exp(-T / 4065.0 + std::pow(T / 13193.0, 3.0));
+}
+
 // k_rxn[117] H + Li -> LiH + γ
 inline double r117_H_Li_to_LiH(const PrimRateContext& c) {
-  return 4.0e-20 * std::exp(-c.T_K / 4065.0 + std::pow(c.T_K / 13193.0, 3.0));
+  return k_H_Li_to_LiH(c.T_K);
 }
 
 // k_rxn[118] H2+ + Li -> H+ + LiH
@@ -875,116 +934,132 @@ inline double r129_H2_Li_to_H2_e_Lip(const PrimRateContext& c, double delE) {
 // this assembler only wires slot indices to law names.  The Form template
 // parameter selects the per-model expression forms (r3, r14, r21, r53).
 // ---------------------------------------------------------------------------
-template <RateForm Form, int N_react>
-inline void compute_HHeD_rates(std::array<double, 2 * N_react>& k_rxn,
-                               const PrimRateContext& c) {
+// Sink form (kinetics/rates.h): evaluates only the laws the sink keeps.
+template <RateForm Form, class K>
+inline void compute_HHeD_rates(K& k_rxn, const PrimRateContext& c) {
   namespace rl = ratelaw::prim;
 
   // ── H, He reactions  k_rxn[0..45] ──────────────────────────────────────
-  k_rxn[rxn::H_e_to_Hp_2e] = rl::r0_H_e_to_Hp_2e(c);
-  k_rxn[rxn::Hp_rec_caseB] = rl::r1_Hp_rec_caseB(c);
-  k_rxn[2] = rl::r2_He_e_to_Hep_2e(c);
-  k_rxn[rxn::Hep_rec] = rl::r3_Hep_rec<Form>(c);
-  k_rxn[4] = rl::r4_Hep_e_to_Hepp_2e(c);
-  k_rxn[5] = rl::r5_Hepp_rec_caseB(c);
-  k_rxn[rxn::H_e_to_Hm] = rl::r6_H_e_to_Hm(c);
-  k_rxn[rxn::Hm_H_to_H2_e] = rl::r7_Hm_H_to_H2_e(c);
-  k_rxn[8] = rl::r8_H_Hp_to_H2p(c);
-  k_rxn[rxn::H2p_H_to_H2_Hp] = rl::r9_H2p_H_to_H2_Hp(c);
-  k_rxn[10] = rl::r10_H2_Hp_to_H2p_H(c);
-  k_rxn[11] = rl::r11_H2_e_to_2H_e(c);
-  k_rxn[12] = rl::r12_H2_H_to_3H(c);
-  k_rxn[rxn::Hm_e_to_H_2e] = rl::r13_Hm_e_to_H_2e(c);
-  k_rxn[rxn::Hm_Hp_to_2H] = rl::r14_Hm_Hp_to_2H<Form>(c);
-  k_rxn[15] = rl::r15_Hm_Hp_to_H2p_e(c);
-  k_rxn[16] = rl::r16_H2p_e_to_2H(c);
-  k_rxn[17] = rl::r17_H2p_Hm_to_H2_H(c);
-  k_rxn[rxn::three_H] = rl::r18_three_H(c);
-  k_rxn[19] = rl::r19_2H_H2_to_2H2(c);
-  k_rxn[rxn::H2H2_dis] = rl::r20_2H2_to_2H_H2(c);
-  k_rxn[21] = rl::r21_H_H_to_H_e_Hp<Form>(c);
-  k_rxn[22] = rl::r22_2H_grain(c);
-  k_rxn[23] = rl::r23_Hep_H2_to_Hp_H_He(c);
-  k_rxn[24] = rl::r24_H2p_He_to_HeHp_H(c);
-  k_rxn[25] = rl::r25_H2p_H2_to_H3p_H(c);
-  k_rxn[26] = rl::r26_H3p_Hm_to_2H2(c);
-  k_rxn[27] = rl::r27_Hep_H_to_Hp_He(c);
-  k_rxn[28] = rl::r28_Hep_Hm_to_H_He(c);
-  k_rxn[rxn::Hep_H2_to_H2p_He] = rl::r29_Hep_H2_to_H2p_He(c);
-  k_rxn[30] = rl::r30_HeHp_H_to_H2p_He(c);
-  k_rxn[31] = rl::r31_HeHp_H2_to_H3p_He(c);
-  k_rxn[32] = rl::r32_H2p_Hm_to_H3p_e(c);
-  k_rxn[33] = rl::r33_H3p_e_to_H2_H(c);
-  k_rxn[34] = rl::r34_H3p_e_to_3H(c);
-  k_rxn[35] = rl::r35_HeHp_e_to_H_He(c);
-  k_rxn[rxn::H2_He_dis] = rl::r36_H2_He_to_2H_He(c);
-  k_rxn[rxn::Hm_H_to_2H_e] = rl::r37_Hm_H_to_2H_e(c);
-  k_rxn[38] = rl::r38_Hm_H2p_to_3H(c);
-  k_rxn[39] = rl::r39_H2_e_to_Hm_H(c);
-  k_rxn[40] = rl::r40_He_Hp_to_Hep_H(c);
-  k_rxn[41] = rl::r41_He_Hm_to_He_H_e(c);
-  k_rxn[42] = rl::r42_2H_He_to_H2_He(c);
-  k_rxn[43] = rl::r43_H_H2p_to_H3p(c);
-  k_rxn[44] = rl::r44_H2_Hp_to_H3p(c);
-  k_rxn[45] = rl::r45_He_Hp_to_HeHp(c);
+  if (k_rxn.want(rxn::H_e_to_Hp_2e))
+    k_rxn[rxn::H_e_to_Hp_2e] = rl::r0_H_e_to_Hp_2e(c);
+  if (k_rxn.want(rxn::Hp_rec_caseB))
+    k_rxn[rxn::Hp_rec_caseB] = rl::r1_Hp_rec_caseB(c);
+  if (k_rxn.want(2)) k_rxn[2] = rl::r2_He_e_to_Hep_2e(c);
+  if (k_rxn.want(rxn::Hep_rec)) k_rxn[rxn::Hep_rec] = rl::r3_Hep_rec<Form>(c);
+  if (k_rxn.want(4)) k_rxn[4] = rl::r4_Hep_e_to_Hepp_2e(c);
+  if (k_rxn.want(5)) k_rxn[5] = rl::r5_Hepp_rec_caseB(c);
+  if (k_rxn.want(rxn::H_e_to_Hm)) k_rxn[rxn::H_e_to_Hm] = rl::r6_H_e_to_Hm(c);
+  if (k_rxn.want(rxn::Hm_H_to_H2_e))
+    k_rxn[rxn::Hm_H_to_H2_e] = rl::r7_Hm_H_to_H2_e(c);
+  if (k_rxn.want(8)) k_rxn[8] = rl::r8_H_Hp_to_H2p(c);
+  if (k_rxn.want(rxn::H2p_H_to_H2_Hp))
+    k_rxn[rxn::H2p_H_to_H2_Hp] = rl::r9_H2p_H_to_H2_Hp(c);
+  if (k_rxn.want(10)) k_rxn[10] = rl::r10_H2_Hp_to_H2p_H(c);
+  if (k_rxn.want(11)) k_rxn[11] = rl::r11_H2_e_to_2H_e(c);
+  if (k_rxn.want(12)) k_rxn[12] = rl::r12_H2_H_to_3H(c);
+  if (k_rxn.want(rxn::Hm_e_to_H_2e))
+    k_rxn[rxn::Hm_e_to_H_2e] = rl::r13_Hm_e_to_H_2e(c);
+  if (k_rxn.want(rxn::Hm_Hp_to_2H))
+    k_rxn[rxn::Hm_Hp_to_2H] = rl::r14_Hm_Hp_to_2H<Form>(c);
+  if (k_rxn.want(15)) k_rxn[15] = rl::r15_Hm_Hp_to_H2p_e(c);
+  if (k_rxn.want(16)) k_rxn[16] = rl::r16_H2p_e_to_2H(c);
+  if (k_rxn.want(17)) k_rxn[17] = rl::r17_H2p_Hm_to_H2_H(c);
+  if (k_rxn.want(rxn::three_H)) k_rxn[rxn::three_H] = rl::r18_three_H(c);
+  if (k_rxn.want(19)) k_rxn[19] = rl::r19_2H_H2_to_2H2(c);
+  if (k_rxn.want(rxn::H2H2_dis)) k_rxn[rxn::H2H2_dis] = rl::r20_2H2_to_2H_H2(c);
+  if (k_rxn.want(21)) k_rxn[21] = rl::r21_H_H_to_H_e_Hp<Form>(c);
+  if (k_rxn.want(22)) k_rxn[22] = rl::r22_2H_grain(c);
+  if (k_rxn.want(23)) k_rxn[23] = rl::r23_Hep_H2_to_Hp_H_He(c);
+  if (k_rxn.want(24)) k_rxn[24] = rl::r24_H2p_He_to_HeHp_H(c);
+  if (k_rxn.want(25)) k_rxn[25] = rl::r25_H2p_H2_to_H3p_H(c);
+  if (k_rxn.want(26)) k_rxn[26] = rl::r26_H3p_Hm_to_2H2(c);
+  if (k_rxn.want(27)) k_rxn[27] = rl::r27_Hep_H_to_Hp_He(c);
+  if (k_rxn.want(28)) k_rxn[28] = rl::r28_Hep_Hm_to_H_He(c);
+  if (k_rxn.want(rxn::Hep_H2_to_H2p_He))
+    k_rxn[rxn::Hep_H2_to_H2p_He] = rl::r29_Hep_H2_to_H2p_He(c);
+  if (k_rxn.want(30)) k_rxn[30] = rl::r30_HeHp_H_to_H2p_He(c);
+  if (k_rxn.want(31)) k_rxn[31] = rl::r31_HeHp_H2_to_H3p_He(c);
+  if (k_rxn.want(32)) k_rxn[32] = rl::r32_H2p_Hm_to_H3p_e(c);
+  if (k_rxn.want(33)) k_rxn[33] = rl::r33_H3p_e_to_H2_H(c);
+  if (k_rxn.want(34)) k_rxn[34] = rl::r34_H3p_e_to_3H(c);
+  if (k_rxn.want(35)) k_rxn[35] = rl::r35_HeHp_e_to_H_He(c);
+  if (k_rxn.want(rxn::H2_He_dis))
+    k_rxn[rxn::H2_He_dis] = rl::r36_H2_He_to_2H_He(c);
+  if (k_rxn.want(rxn::Hm_H_to_2H_e))
+    k_rxn[rxn::Hm_H_to_2H_e] = rl::r37_Hm_H_to_2H_e(c);
+  if (k_rxn.want(38)) k_rxn[38] = rl::r38_Hm_H2p_to_3H(c);
+  if (k_rxn.want(39)) k_rxn[39] = rl::r39_H2_e_to_Hm_H(c);
+  if (k_rxn.want(40)) k_rxn[40] = rl::r40_He_Hp_to_Hep_H(c);
+  if (k_rxn.want(41)) k_rxn[41] = rl::r41_He_Hm_to_He_H_e(c);
+  if (k_rxn.want(42)) k_rxn[42] = rl::r42_2H_He_to_H2_He(c);
+  if (k_rxn.want(43)) k_rxn[43] = rl::r43_H_H2p_to_H3p(c);
+  if (k_rxn.want(44)) k_rxn[44] = rl::r44_H2_Hp_to_H3p(c);
+  if (k_rxn.want(45)) k_rxn[45] = rl::r45_He_Hp_to_HeHp(c);
 
   // ── D reactions  k_rxn[46..99] ─────────────────────────────────────────
-  k_rxn[46] = rl::r46_HD_e_to_H_D_e(c);
-  k_rxn[47] = rl::r47_HD_He_to_H_D_He(c);
-  k_rxn[48] = rl::r48_HD_H2_to_H_D_H2(c);
-  k_rxn[49] = rl::r49_HD_H_to_2H_D(c);
-  k_rxn[50] = rl::r50_Dp_rec(c);
-  k_rxn[51] = rl::r51_D_Hp_to_Dp_H(c);
-  k_rxn[52] = rl::r52_Dp_H_to_D_Hp(c);
-  k_rxn[53] = rl::r53_D_H_to_HD<Form>(c);
-  k_rxn[54] = rl::r54_D_H2_to_H_HD(c);
-  k_rxn[55] = rl::r55_HDp_H_to_Hp_HD(c);
-  k_rxn[56] = rl::r56_Dp_H2_to_Hp_HD(c);
-  k_rxn[57] = rl::r57_HD_H_to_H2_D(c);
-  k_rxn[58] = rl::r58_HD_Hp_to_H2_Dp(c);
-  k_rxn[59] = rl::r59_D_Hp_to_HDp(c);
-  k_rxn[60] = rl::r60_Dp_H_to_HDp(c);
-  k_rxn[61] = rl::r61_HDp_e_to_H_D(c);
-  k_rxn[62] = rl::r62_D_e_to_Dm(c);
-  k_rxn[63] = rl::r63_Dp_Dm_to_2D<Form>(c);
-  k_rxn[64] = rl::r64_Hp_Dm_to_D_H<Form>(c);
-  k_rxn[65] = rl::r65_Hm_D_to_H_Dm(c);
-  k_rxn[66] = rl::r66_Dm_H_to_D_Hm(c);
-  k_rxn[67] = rl::r67_Dm_H_to_HD_e(c);
-  k_rxn[68] = rl::r68_D_e_to_Dp_2e(c);
-  k_rxn[69] = rl::r69_Hep_D_to_Dp_He(c);
-  k_rxn[70] = rl::r70_He_Dp_to_D_Hep(c);
-  k_rxn[71] = rl::r71_H2p_D_to_HDp_H(c);
-  k_rxn[72] = rl::r72_HDp_D_to_HD_Dp(c);
-  k_rxn[73] = rl::r73_HDp_H_to_H2p_D(c);
-  k_rxn[74] = rl::r74_HD_e_to_H_Dm(c);
-  k_rxn[75] = rl::r75_HD_e_to_D_Hm(c);
-  k_rxn[76] = rl::r76_Hp_Dm_to_HDp_e(c);
-  k_rxn[77] = rl::r77_Dp_Hm_to_HDp_e(c);
-  k_rxn[78] = rl::r78_Dm_e_to_D_2e(c);
-  k_rxn[79] = rl::r79_Dm_H_to_D_H_e(c);
-  k_rxn[80] = rl::r80_Dm_He_to_D_He_e(c);
-  k_rxn[81] = rl::r81_Dp_Hm_to_D_H<Form>(c);
-  k_rxn[82] = rl::r82_H2p_Dm_to_H2_D(c);
-  k_rxn[83] = rl::r83_H2p_Dm_to_2H_D(c);
-  k_rxn[84] = rl::r84_HDp_Hm_to_HD_H(c);
-  k_rxn[85] = rl::r85_HDp_Hm_to_D_2H(c);
-  k_rxn[86] = rl::r86_HDp_Dm_to_HD_D(c);
-  k_rxn[87] = rl::r87_HDp_Dm_to_2D_H(c);
-  k_rxn[88] = rl::r88_Hep_Dm_to_He_D(c);
-  k_rxn[89] = rl::r89_D_H2p_to_H2_Dp(c);
-  k_rxn[90] = rl::r90_H2p_D_to_HD_Hp(c);
-  k_rxn[91] = rl::r91_HDp_H_to_H2_Dp(c);
-  k_rxn[92] = rl::r92_H2_Dp_to_H2p_D(c);
-  k_rxn[93] = rl::r93_H2_Dp_to_HDp_H(c);
-  k_rxn[94] = rl::r94_HD_Hp_to_HDp_H(c);
-  k_rxn[95] = rl::r95_HD_Hp_to_H2p_D(c);
-  k_rxn[96] = rl::r96_HD_Dp_to_HDp_D(c);
-  k_rxn[97] = rl::r97_HD_Hep_to_HDp_He(c);
-  k_rxn[98] = rl::r98_HD_Hep_to_He_Hp_D(c);
-  k_rxn[99] = rl::r99_HD_Hep_to_He_H_Dp(c);
+  if (k_rxn.want(46)) k_rxn[46] = rl::r46_HD_e_to_H_D_e(c);
+  if (k_rxn.want(47)) k_rxn[47] = rl::r47_HD_He_to_H_D_He(c);
+  if (k_rxn.want(48)) k_rxn[48] = rl::r48_HD_H2_to_H_D_H2(c);
+  if (k_rxn.want(49)) k_rxn[49] = rl::r49_HD_H_to_2H_D(c);
+  if (k_rxn.want(50)) k_rxn[50] = rl::r50_Dp_rec(c);
+  if (k_rxn.want(51)) k_rxn[51] = rl::r51_D_Hp_to_Dp_H(c);
+  if (k_rxn.want(52)) k_rxn[52] = rl::r52_Dp_H_to_D_Hp(c);
+  if (k_rxn.want(53)) k_rxn[53] = rl::r53_D_H_to_HD<Form>(c);
+  if (k_rxn.want(54)) k_rxn[54] = rl::r54_D_H2_to_H_HD(c);
+  if (k_rxn.want(55)) k_rxn[55] = rl::r55_HDp_H_to_Hp_HD(c);
+  if (k_rxn.want(56)) k_rxn[56] = rl::r56_Dp_H2_to_Hp_HD(c);
+  if (k_rxn.want(57)) k_rxn[57] = rl::r57_HD_H_to_H2_D(c);
+  if (k_rxn.want(58)) k_rxn[58] = rl::r58_HD_Hp_to_H2_Dp(c);
+  if (k_rxn.want(59)) k_rxn[59] = rl::r59_D_Hp_to_HDp(c);
+  if (k_rxn.want(60)) k_rxn[60] = rl::r60_Dp_H_to_HDp(c);
+  if (k_rxn.want(61)) k_rxn[61] = rl::r61_HDp_e_to_H_D(c);
+  if (k_rxn.want(62)) k_rxn[62] = rl::r62_D_e_to_Dm(c);
+  if (k_rxn.want(63)) k_rxn[63] = rl::r63_Dp_Dm_to_2D<Form>(c);
+  if (k_rxn.want(64)) k_rxn[64] = rl::r64_Hp_Dm_to_D_H<Form>(c);
+  if (k_rxn.want(65)) k_rxn[65] = rl::r65_Hm_D_to_H_Dm(c);
+  if (k_rxn.want(66)) k_rxn[66] = rl::r66_Dm_H_to_D_Hm(c);
+  if (k_rxn.want(67)) k_rxn[67] = rl::r67_Dm_H_to_HD_e(c);
+  if (k_rxn.want(68)) k_rxn[68] = rl::r68_D_e_to_Dp_2e(c);
+  if (k_rxn.want(69)) k_rxn[69] = rl::r69_Hep_D_to_Dp_He(c);
+  if (k_rxn.want(70)) k_rxn[70] = rl::r70_He_Dp_to_D_Hep(c);
+  if (k_rxn.want(71)) k_rxn[71] = rl::r71_H2p_D_to_HDp_H(c);
+  if (k_rxn.want(72)) k_rxn[72] = rl::r72_HDp_D_to_HD_Dp(c);
+  if (k_rxn.want(73)) k_rxn[73] = rl::r73_HDp_H_to_H2p_D(c);
+  if (k_rxn.want(74)) k_rxn[74] = rl::r74_HD_e_to_H_Dm(c);
+  if (k_rxn.want(75)) k_rxn[75] = rl::r75_HD_e_to_D_Hm(c);
+  if (k_rxn.want(76)) k_rxn[76] = rl::r76_Hp_Dm_to_HDp_e(c);
+  if (k_rxn.want(77)) k_rxn[77] = rl::r77_Dp_Hm_to_HDp_e(c);
+  if (k_rxn.want(78)) k_rxn[78] = rl::r78_Dm_e_to_D_2e(c);
+  if (k_rxn.want(79)) k_rxn[79] = rl::r79_Dm_H_to_D_H_e(c);
+  if (k_rxn.want(80)) k_rxn[80] = rl::r80_Dm_He_to_D_He_e(c);
+  if (k_rxn.want(81)) k_rxn[81] = rl::r81_Dp_Hm_to_D_H<Form>(c);
+  if (k_rxn.want(82)) k_rxn[82] = rl::r82_H2p_Dm_to_H2_D(c);
+  if (k_rxn.want(83)) k_rxn[83] = rl::r83_H2p_Dm_to_2H_D(c);
+  if (k_rxn.want(84)) k_rxn[84] = rl::r84_HDp_Hm_to_HD_H(c);
+  if (k_rxn.want(85)) k_rxn[85] = rl::r85_HDp_Hm_to_D_2H(c);
+  if (k_rxn.want(86)) k_rxn[86] = rl::r86_HDp_Dm_to_HD_D(c);
+  if (k_rxn.want(87)) k_rxn[87] = rl::r87_HDp_Dm_to_2D_H(c);
+  if (k_rxn.want(88)) k_rxn[88] = rl::r88_Hep_Dm_to_He_D(c);
+  if (k_rxn.want(89)) k_rxn[89] = rl::r89_D_H2p_to_H2_Dp(c);
+  if (k_rxn.want(90)) k_rxn[90] = rl::r90_H2p_D_to_HD_Hp(c);
+  if (k_rxn.want(91)) k_rxn[91] = rl::r91_HDp_H_to_H2_Dp(c);
+  if (k_rxn.want(92)) k_rxn[92] = rl::r92_H2_Dp_to_H2p_D(c);
+  if (k_rxn.want(93)) k_rxn[93] = rl::r93_H2_Dp_to_HDp_H(c);
+  if (k_rxn.want(94)) k_rxn[94] = rl::r94_HD_Hp_to_HDp_H(c);
+  if (k_rxn.want(95)) k_rxn[95] = rl::r95_HD_Hp_to_H2p_D(c);
+  if (k_rxn.want(96)) k_rxn[96] = rl::r96_HD_Dp_to_HDp_D(c);
+  if (k_rxn.want(97)) k_rxn[97] = rl::r97_HD_Hep_to_HDp_He(c);
+  if (k_rxn.want(98)) k_rxn[98] = rl::r98_HD_Hep_to_He_Hp_D(c);
+  if (k_rxn.want(99)) k_rxn[99] = rl::r99_HD_Hep_to_He_H_Dp(c);
 
   // (No zero-forcing here — each caller applies its own set.)
+}
+
+template <RateForm Form, int N_react>
+inline void compute_HHeD_rates(std::array<double, 2 * N_react>& k_rxn_array,
+                               const PrimRateContext& c) {
+  DirectRates<N_react> k{k_rxn_array};
+  compute_HHeD_rates<Form>(k, c);
 }
 
 // ---------------------------------------------------------------------------
@@ -993,8 +1068,7 @@ inline void compute_HHeD_rates(std::array<double, 2 * N_react>& k_rxn,
 // Writes the 9 CR channel rates into k_rxn[cr_base + 0..8].  cr_base defaults to
 // the full network's CR block head (k_rxn[130..138]); the compact
 // Nakauchi2019_Minimal passes its own CR-block head so the same channel set is
-// emitted at its compact slots.  The full default reproduces the original
-// k_rxn[130..138] writes verbatim (bit-for-bit).
+// emitted at its compact slots.
 // ---------------------------------------------------------------------------
 template <int N_react>
 inline void compute_CR_rates_prim(std::array<double, 2 * N_react>& k_rxn,
