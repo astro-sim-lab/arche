@@ -10,7 +10,7 @@ target_compile_definitions(prim_collapse PRIVATE
 # the Nakauchi2019_Minimal network (compact 15-species / 33-reaction primordial
 # model — a first-class composed network, not a mask over the full one).  It
 # reuses the same primordial.h5 table for the partition functions.  Same
-# pattern as the ARCHE_XRAY / ARCHE_SUBCYCLE compile-time variants.
+# pattern as the ARCHE_XRAY compile-time variant.
 add_executable(arche_collapse_prim_minimal main.cc)
 target_link_libraries(arche_collapse_prim_minimal PRIVATE arche::arche collapse_common)
 

@@ -7,11 +7,11 @@ target_compile_definitions(metal_collapse PRIVATE
 
 # ── Compact "minimal" variant ──────────────────────────────────────────────────
 # Second target built from the same main.cc with -DARCHE_METAL_MINIMAL, selecting
-# the Nakauchi2021_Minimal network (compact 40-species / 103+10-reaction metal
+# the Nakauchi2021_Minimal network (compact 44-species / 103+10-reaction metal
 # model — a first-class composed network, not a mask over the full one).  Same
 # pattern as collapse_primordial's ARCHE_PRIM_MINIMAL; it reuses metal_grain.h5
 # for the partition functions (the compact table retains the full PF-loaded table
-# for the strategy-1 rate path and the compact Saha).  main.cc selects the
+# for the compact rate path and the compact Saha).  main.cc selects the
 # variant through the AppCell/AppSp abstraction at its head; the compact build
 # omits the K/Na/Gr2+/He++ species the network drops.
 add_executable(arche_collapse_metal_minimal main.cc)

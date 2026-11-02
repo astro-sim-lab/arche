@@ -4,7 +4,7 @@
 //
 // main.cc — standalone metal-grain chemistry demo using chem_full_step()
 //
-// Demonstrates the chem_full_step() API for the metal-grain (89-species)
+// Demonstrates the chem_full_step() API for the metal-grain (95-species)
 // network in isolation, without gravitational-collapse hydrodynamics.
 //
 // The gas cell is held at fixed density and temperature (isochoric,
@@ -14,7 +14,7 @@
 //   - compute zeta from an attenuation model or ray-tracing
 //   - supply all column densities from column integration (TreeCol, Sobolev,
 //   etc.)
-//   - supply tau_cnt/esc_cnt from the opacity field
+//   - supply the continuum shielding column rho*L (cnt_column)
 //   - update T_gr_K from the previous step's params.T_gr_K
 //
 // Here we approximate column densities as n × L_Jeans (same as the
@@ -305,7 +305,7 @@ int main() {
   constexpr double kPi = arche::phys::pi;
   constexpr double kGGrav = arche::phys::G;
 
-  // ── Initial conditions (metal-grain network, 89 species) ─────────────────
+  // ── Initial conditions (metal-grain network, 95 species) ─────────────────
   arche::MetalCellPtr cell = arche::metal_cell_create_owned();
   arche::ChemStateMG& st = arche::metal_cell_state(*cell);
   auto& y = st.y;
@@ -359,12 +359,6 @@ int main() {
   params.T_gr_K = params.T_rad;  // initial grain temperature = CMB temperature
   params.T_cr_desorp = t_cr_desorp;
 
-  // ── Persistent opacities across steps ────────────────────────────────────
-  double k_gr = 0.0;
-  double k_gas = 0.0;
-  double tau_cnt = 0.0;
-  double esc_cnt = 1.0;
-
   // ── Print header ──────────────────────────────────────────────────────────
   std::printf(
       "# metal-grain chemistry demo:"
@@ -405,9 +399,6 @@ int main() {
       return y[idx] * nH * lsh;
     };
 
-    tau_cnt = (k_gr + k_gas) * rho * lmbd_J;
-    esc_cnt = (tau_cnt > 1.0) ? 1.0 / (tau_cnt * tau_cnt) : 1.0;
-
     arche::ChemShielding shield;
     const double zeta_r_short = sra_rate * 7.6e-19;
     const double zeta_r_long = lra_rate * 1.4e-22 * Z_metal;
@@ -424,8 +415,7 @@ int main() {
     shield.Nc_CI = Nc(16, 12.0);
     shield.Nc_OI = Nc(29, 16.0);
     shield.J_LW21 = jlw21;
-    shield.tau_cnt = tau_cnt;
-    shield.esc_cnt = esc_cnt;
+    shield.cnt_column = rho * lmbd_J;  // continuum depth = opacity * column
 
     st.nH = nH;  // fixed (isothermal/isochoric demo)
     st.T_K = T_K;
@@ -437,8 +427,6 @@ int main() {
 
     mu = st.mu;
     gamma = st.gamma;
-    k_gr = rates.k_gr;
-    k_gas = rates.k_gas;
     // Grain temperature is now returned (not written into params); feed it
     // back as the next step's warm-start seed.
     params.T_gr_K = rates.T_gr_K;

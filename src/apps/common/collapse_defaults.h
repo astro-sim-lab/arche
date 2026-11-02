@@ -41,8 +41,6 @@ constexpr double kDtFactorInit =
     1.0e-8;                          // timestep fraction during initial phase
 constexpr int kNInitSteps = 10;      // number of initial short-timestep steps
 constexpr double kXnHStop = 1.0e23;  // density ceiling [cm^-3]
-constexpr double kTHighStop =
-    1.0e5;  // temperature ceiling (validated T_max) [K]
 // HDF5 output stride: write every N-th step.  Shared by both models.
 constexpr int kOutputStride = 10;
 // Maximum integration steps before MaxIter exit.  Shared by both models.
@@ -62,24 +60,16 @@ constexpr double kJLW21 =
 constexpr double kZred = 0.0;    // cosmological redshift
 constexpr double kZmetal = 0.0;  // metallicity [Z_sun] (metal_grain only)
 
-// ─── Subcycle control (ARCHE_SUBCYCLE) ───────────────────────────────────────
-// Maximum bisection depth for chemcool subcycling.
-// dt is halved up to kSubcycleMaxLevel times (2^6 = 64 sub-steps at most).
-constexpr int kSubcycleMaxLevel = 6;
-
 // ─── ExitReason ──────────────────────────────────────────────────────────────
-// Categorises why the time integration loop terminated.  exit_code values
-// written to stdout and HDF5 attributes match enum order.  SolverFailed is
-// always defined (even without ARCHE_SUBCYCLE) to keep enum values stable
-// across build configurations.
+// Categorises why the time integration loop terminated.  The exit_code
+// written to stdout and HDF5 attributes is fixed by to_exit_code(), not by the
+// enum order: code 2 is unused.
 enum class ExitReason {
-  Normal,    // 0: nH >= kXnHStop     (density ceiling reached — expected end)
-  MaxIter,   // 1: it  >  max_iter     (step limit hit before density ceiling)
-  HighTemp,  // 2: T_K > kTHighStop    (T ceiling reached — expected end)
+  Normal,   // 0: nH >= kXnHStop     (density ceiling reached — expected end)
+  MaxIter,  // 1: it  >  max_iter     (step limit hit before density ceiling)
   NegEnergy,     // 3: e  <= 0             (internal energy went non-positive)
   NonFinite,     // 4: NaN/Inf in nH or T_K
-  SolverFailed,  // 5: subcycle max depth exceeded without NR convergence
-                 // (ARCHE_SUBCYCLE)
+  SolverFailed,  // 5: chem_full_step returned solver_failed
 };
 
 // Normalise a numeric string to the canonical tag form used in filenames.
