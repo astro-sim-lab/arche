@@ -210,21 +210,29 @@ inline double eval_opacity(double T_K, double rho) {
        {-0.460, -0.447, -0.405, -0.335, -0.213, -0.026, 0.238, 0.577, 0.972,
         0.000, 0.000, 0.000, 0.000, 0.000, 0.000, 0.000, 0.000, 0.000, 0.000}}};
 
-  double temp6 = T_K / 1.0e6;
+  // The table holds data up to log R = 4 for T6 <= 2.5e-2, 3 for T6 <= 4e-2 and -1
+  // above; the columns past a row's last valid one are placeholders. Above the data in
+  // log R and below 750 K the opacity is continued continuously, so that a solve
+  // crossing those edges sees no jump:
+  //   log R above the data: the row's last valid value (the rows at T6 = 3e-2..4e-2
+  //     already repeat it);
+  //   T below 750 K: the value at 750 K and the same density.
+  // Below log R = -5 it is zero: there the LTE composition the table assumes
+  // overstates the ionization of the gas, and extending the table would add continuum
+  // cooling the gas does not have. Above T6 = 1 the bilinear form is extrapolated in T6.
+  static constexpr auto k_tab = [] {
+    auto k = rlgk;
+    for (int i = 0; i < 57; ++i) {
+      const int last = T6[i] <= 2.5e-2 ? 18 : (T6[i] <= 4.0e-2 ? 16 : 8);
+      for (int j = last + 1; j < 19; ++j) k[i][j] = k[i][last];
+    }
+    return k;
+  }();
+
+  double temp6 = std::max(T_K / 1.0e6, T6[0]);
   double rlogR = std::log10(rho / (temp6 * temp6 * temp6));
-
-  bool in_T_lo = (temp6 >= 0.75e-3) && (temp6 <= 2.5e-2);
-  bool in_T_mid = (temp6 >= 2.5e-2) && (temp6 <= 4.0e-2);
-  bool in_T_hi = (temp6 > 4.0e-2);
-  bool in_R_full = (rlogR >= -5.0) && (rlogR <= 4.0);
-  bool in_R_mid = (rlogR >= -5.0) && (rlogR <= 3.0);
-  bool in_R_hi = (rlogR >= -5.0) && (rlogR <= -1.0);
-
-  bool do_interp =
-      (in_T_lo && in_R_full) || (in_T_mid && in_R_mid) || (in_T_hi && in_R_hi);
-
-  if (temp6 < 0.75e-3 || rlogR < -5.0) return 0.0;
-  if (!do_interp) return 1.0e5;
+  if (rlogR < rlgR[0]) return 0.0;
+  rlogR = std::min(rlogR, rlgR[18]);
 
   int ms = 56;
   for (int i = 0; i < 57; ++i)
@@ -244,9 +252,9 @@ inline double eval_opacity(double T_K, double rho) {
 
   double t = (temp6 - T6[ms - 1]) / (T6[ms] - T6[ms - 1]);
   double u = (rlogR - rlgR[ns - 1]) / (rlgR[ns] - rlgR[ns - 1]);
-  double rlogk = (1.0 - t) * (1.0 - u) * rlgk[ms - 1][ns - 1] +
-                 t * (1.0 - u) * rlgk[ms][ns - 1] + t * u * rlgk[ms][ns] +
-                 (1.0 - t) * u * rlgk[ms - 1][ns];
+  double rlogk = (1.0 - t) * (1.0 - u) * k_tab[ms - 1][ns - 1] +
+                 t * (1.0 - u) * k_tab[ms][ns - 1] + t * u * k_tab[ms][ns] +
+                 (1.0 - t) * u * k_tab[ms - 1][ns];
   return std::pow(10.0, rlogk);
 }
 
