@@ -37,8 +37,7 @@ cmake --install build --prefix "$PWD/_prefix"
 
 > **Build your consumer with the same compiler/toolchain as `libarche.a`.** The
 > archive carries compiled object code, so it is not compiler-agnostic. If ARCHE
-> was built with Intel oneAPI (`icpx`/`icx` — required for the bit-for-bit verify
-> flow), pass `-DCMAKE_CXX_COMPILER=icpx -DCMAKE_C_COMPILER=icx` when configuring
+> was built with Intel oneAPI (`icpx`/`icx`), pass `-DCMAKE_CXX_COMPILER=icpx -DCMAKE_C_COMPILER=icx` when configuring
 > the consumer too; otherwise a GNU `g++` link fails with undefined references to
 > Intel runtime helpers (`__cpu_core_type`, `__detect_cpu_core_type`, …). Build
 > ARCHE with GNU if you need GNU consumers.
@@ -141,15 +140,18 @@ updated abundances and the net cooling/heating rate back out. Concretely, per
 cell per step you
 
 - **set inputs** on the cell: `nH` `[cm^-3]`, `T_K` `[K]`, `mu`, `gamma`, and the
-  abundance vector `y[i] = n(species i) / nH` (dimensionless, relative to H);
-  plus a `ChemShielding` (attenuated CR rate, continuum optical depth, optional
-  LW/X-ray field) and a `ChemParams` (`T_rad`, and for metal `Z_metal`,
+  abundance vector `y[i] = n(species i) / nH` (dimensionless, relative to H),
+  charge-neutral (a charged state is neutralised once and reported in
+  `status.input_neutralized`, or rejected when strongly charged — see
+  `docs/api_reference.md` §4);
+  plus a `ChemShielding` (attenuated CR rate, continuum shielding column
+  `cnt_column = rho*L`, optional LW/X-ray field) and a `ChemParams` (`T_rad`, and for metal `Z_metal`,
   `T_gr_K`);
 - **get outputs** back: ARCHE updates `y`, `mu`, `gamma` in place and returns a
   `ChemFullRates` whose `Lambda_net` `[erg g^-1 s^-1]` is the net cooling for your
   energy equation (`de/dt = -Lambda_net` on the specific internal energy), along
-  with the per-process cooling breakdown and the opacities (`k_gas`, `k_gr`) you
-  feed into the next step's `tau_cnt`.
+  with the per-process cooling breakdown and the end state's opacities and
+  continuum depth (`k_gas`, `k_gr`, `tau_cnt`).
 
 **Which slot of `y[]` is which species, and what to initialise it to**, is
 documented per model — including a name → index pattern so you never hard-code
@@ -190,11 +192,11 @@ ChemFullRates r = chem_full_step_prim(*cell, /*dt=*/1.0e8, params, shield, *tbl)
 Indexing `y[]` by name (`zm::H`, `zm::Hp`, …) instead of by literal `0`/`3` keeps
 the initialisation explicit and model-correct — the index order differs between
 models. Swap `prim_*` for `metal_*` (and `ChemStateZM`/23 species + `zm::` for
-`ChemStateMG`/89 + `metal_grain::`) for the metal+grain network, or use the
+`ChemStateMG`/95 + `metal_grain::`) for the metal+grain network, or use the
 runtime `Model` / `Cell` / `Table` dispatch layer to pick the model at runtime.
 The two compact networks have their own per-model entry points in the same shape:
 `prim_minimal_*` (`ChemStatePrimMinimal`/15 + `zero_metal_minimal::`) loads
-`primordial.h5`, and `metal_minimal_*` (`ChemStateMetalMinimal`/40 +
+`primordial.h5`, and `metal_minimal_*` (`ChemStateMetalMinimal`/44 +
 `metal_grain_minimal::`) loads `metal_grain.h5`. See
 [`cpp_minimal/main.cc`](cpp_minimal/main.cc) and
 [`c_minimal/main.c`](c_minimal/main.c) for the full, runnable versions.
@@ -206,8 +208,8 @@ hard-coding the species count, the registry API selects a model by name and
 exposes its species count and host-facing names. The handle owns its reaction
 table; per-cell stepping is numerically identical to the per-model entries.
 Registered names: `Nakauchi2019` (23 species), `Nakauchi2019_Minimal`
-(compact 15 species), `Nakauchi2021` (89 species), `Nakauchi2021_Minimal`
-(compact 40 species).
+(compact 15 species), `Nakauchi2021` (95 species), `Nakauchi2021_Minimal`
+(compact 44 species).
 
 `arche_model_species()` returns the species names **in `y[]` order**, so a host
 can build a name → index map once and address every column by species instead of
@@ -229,7 +231,7 @@ y[0] = 1.0 - 1.0e-4; y[2] = 1.0e-4; y[3] = 1.0e-4; y[7] = 8.33e-2;  /* H, e, H+,
 arche_model_cell_set_scalars(c, 1.0e4, 200.0, 1.22, 5.0/3.0);
 
 /* arche_chem_*_init set the library defaults (NOT the same as = {0}:
- * esc_cnt defaults to 1.0 = optically thin, E_X_eV to 300, ...). */
+ * E_X_eV defaults to 300, T_rad to NaN, ...). */
 ArcheChemParams p;    arche_chem_params_init(&p);    p.T_rad = 2.725;
 ArcheChemShielding s; arche_chem_shielding_init(&s); s.zeta = 1.0e-17;
 ArcheChemFullRates r;
@@ -249,7 +251,8 @@ per-model entries and the `Model`-enum dispatch above are unchanged.
 One registry `ModelCell` may be pooled per thread. Before loading an unrelated
 fluid/grid cell into that scratch object, call `model_cell_reset()` (C:
 `arche_model_cell_reset()`). It clears the hidden reaction cache,
-conservation-projection carry, and metal line-escape warm starts while leaving
+conservation-projection carry, step-size hint, and metal line-escape warm starts
+while leaving
 `y[]`, `nH`, `T_K`, `mu`, and `gamma` unchanged. Do not reset between
 consecutive substeps of the same physical cell.
 
@@ -278,12 +281,14 @@ EOS implementation and operation order as the chemistry kernel for identical
 The energy inverse searches `[1, 10^12] K`, clamps finite out-of-range energies
 to those endpoints, propagates a NaN energy, and uses
 `e = k_B T [1.5 S_atoms + c_H2(T)y_H2] / [(1+4yHe)m_p]`. `c_H2()` is continuous
-across `1000 K` — the classical-rotation branch is gone, leaving a `2.2e-14`
-relative step from the change in the number of summed rotational states — so
+across `1000 K`: it evaluates the rotational partition functions without
+switching to the classical limit, and the change in the number of summed
+rotational states there leaves a `2.2e-14` relative step. So
 `e(T)` is monotone over the bracket and the returned root is unique.
-Deterministic log-space bisection selects it. Measured round trips on
-H₂-dominated compositions stay within `1.1e-11` in relative temperature over
-the whole bracket (worst near `1.4 K`), and within `1.5e-12` for `T ≥ 10 K`.
+Secant iteration in log T finds it (log-space bisection where the iteration does
+not converge). Measured round trips on H₂-dominated compositions stay within
+`1.3e-11` in relative temperature over the whole bracket (worst near `1.3 K`),
+and within `1.6e-12` for `T ≥ 10 K`.
 The C query functions return quiet NaN for a NULL cell; the C reset function
 treats NULL as a no-op.
 

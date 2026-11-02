@@ -16,12 +16,12 @@
 //                         kernel and the network sizes (N_sp / N_react) never
 //                         leak into the API/ABI.
 //
-// The implementation (explicit instantiation of chem_(full_)step<Model> and the
+// The implementation (explicit instantiation of chem_full_step<Model> and the
 // opaque-handle bridges) lives in src/lib/arche_api.cc.  This header is
 // declarations only.
 //
 // ── Design notes ──────────────────────────────────────────────────────────
-//   POD structs (ChemParams / ChemShielding / ChemRates / ChemFullRates) are
+//   POD structs (ChemParams / ChemShielding / ChemFullRates) are
 //   already Eigen-free plain data and are exposed directly via "core/state.h",
 //   which pulls in nothing heavier than <array>/<cmath>/<limits> and the public
 //   species metadata (core/species_index.h: per-model Sp index enums and
@@ -74,7 +74,7 @@
 #include <memory>
 #include <string>
 
-#include "core/state.h"  // ChemParams, ChemShielding, ChemRates, ChemFullRates,
+#include "core/state.h"  // ChemParams, ChemShielding, ChemFullRates,
 // ChemState<N_sp>, ChemStateZM / ChemStateMG, phys::...
 // (no Eigen, no HDF5)
 
@@ -85,10 +85,10 @@ namespace arche {
 // it equals zero_metal_minimal::N_sp.
 using ChemStatePrimMinimal = ChemState<15>;
 
-// Compact metal-minimal per-cell state (40 species).  Same convention as
+// Compact metal-minimal per-cell state (44 species).  Same convention as
 // ChemStatePrimMinimal; arche_api.cc static_asserts it equals
 // metal_grain_minimal::N_sp.
-using ChemStateMetalMinimal = ChemState<40>;
+using ChemStateMetalMinimal = ChemState<44>;
 
 // ---------------------------------------------------------------------------
 // Opaque handles.
@@ -106,9 +106,9 @@ using ChemStateMetalMinimal = ChemState<40>;
 struct PrimCell;           // primordial         (Nakauchi2019, 23 species)
 struct PrimMinimalCell;    // primordial minimal (Nakauchi2019_Minimal, compact
                            // 15 species / 33 reactions)
-struct MetalCell;          // metal+grain        (Nakauchi2021, 89 species)
+struct MetalCell;          // metal+grain        (Nakauchi2021, 95 species)
 struct MetalMinimalCell;   // metal minimal      (Nakauchi2021_Minimal, compact
-                           // 40 species / 103+10 reactions)
+                           // 44 species / 103+10 reactions)
 struct PrimTable;          // reaction table for the primordial network
 struct PrimMinimalTable;   // reaction table for the compact minimal network
 struct MetalTable;         // reaction table for the metal+grain network
@@ -151,7 +151,7 @@ const ChemStatePrimMinimal& prim_minimal_cell_state(
 ChemStateMG& metal_cell_state(MetalCell& cell) noexcept;
 const ChemStateMG& metal_cell_state(const MetalCell& cell) noexcept;
 
-// MetalMinimalCell carries the compact 40-species state.
+// MetalMinimalCell carries the compact 44-species state.
 ChemStateMetalMinimal& metal_minimal_cell_state(
     MetalMinimalCell& cell) noexcept;
 const ChemStateMetalMinimal& metal_minimal_cell_state(
@@ -185,8 +185,9 @@ void metal_minimal_table_destroy(MetalMinimalTable* tbl) noexcept;
 // Invariant-row count of a loaded table (see solve/conservation.h).
 //
 // Returns the number of element/charge rows the loaded table is CONFIGURED with:
-// 0 means the network registers none, so chem_full_step_* leaves
-// ChemFullRates::conservation_projected false on every step by design.
+// 5 (Nakauchi2019, Nakauchi2019_Minimal), 9 (Nakauchi2021_Minimal) and 11
+// (Nakauchi2021).  0 means the rows were not built; every internal step is then
+// rejected (SolveFailure::invariants_unavailable) and chem_full_step_* fails.
 //
 // ⚠ This is not the number of rows enforced on a given step.  The projection
 // weights each species by its own abundance, so a row whose carrier species are
@@ -204,14 +205,12 @@ int metal_table_n_invariants(const MetalTable& tbl) noexcept;
 int metal_minimal_table_n_invariants(const MetalMinimalTable& tbl) noexcept;
 
 // ---------------------------------------------------------------------------
-// Stepping entry points (non-template; one pair per model).
+// Stepping entry points (non-template; one per model).
 //
-//   chem_full_step_* — advance one dt AND return the full cooling/heating
-//                      breakdown (line, continuum, chemistry, CR, X-ray, net,
-//                      opacities, solved grain temperature).
-//   chem_step_*      — advance one dt and return only the scalar chemistry
-//                      cooling + CR heating (low-level; caller does line and
-//                      continuum cooling itself).
+//   chem_full_step_* — advance one dt AND return the interval-mean cooling/heating
+//                      breakdown (line, continuum, chemistry, CR, X-ray, net) with
+//                      the end state's opacities, continuum depth and grain
+//                      temperature.
 //
 // On a solver failure chem_full_step_* leaves the cell state rolled back and
 // sets ChemFullRates::solver_failed = true.  T_rad (and, for metal, T_gr_K)
@@ -233,17 +232,6 @@ ChemFullRates chem_full_step_metal(MetalCell& cell, double dt,
                                    const ChemParams& params,
                                    const ChemShielding& shield,
                                    const MetalTable& tbl);
-
-ChemRates chem_step_prim(PrimCell& cell, double dt, const ChemParams& params,
-                         const PrimTable& tbl);
-ChemRates chem_step_prim_minimal(PrimMinimalCell& cell, double dt,
-                                 const ChemParams& params,
-                                 const PrimMinimalTable& tbl);
-ChemRates chem_step_metal_minimal(MetalMinimalCell& cell, double dt,
-                                  const ChemParams& params,
-                                  const MetalMinimalTable& tbl);
-ChemRates chem_step_metal(MetalCell& cell, double dt, const ChemParams& params,
-                          const MetalTable& tbl);
 
 // ---------------------------------------------------------------------------
 // RAII convenience.
@@ -452,13 +440,30 @@ double model_gamma_from_y(const ModelCell& c, double T_K) noexcept;
 // Invert specific internal energy e_cgs [erg g^-1] to temperature [K] for the
 // current composition.  The search covers [1, 1e12] K and finite energies
 // outside that bracket are clamped to the corresponding endpoint. A NaN
-// energy produces a NaN result.  c_H2() is continuous across 1000 K (the
-// classical-rotation switch is gone; the residual step from the change in the
-// number of summed rotational states is 2.2e-14 relative), so e(T) is monotone
-// over the bracket and the root is unique.  Measured T -> e -> T round trips on
-// H2-dominated compositions stay within 1.1e-11 relative over the whole
-// bracket, and within 1.5e-12 for T >= 10 K.
+// energy produces a NaN result.  c_H2() evaluates the rotational partition
+// functions at every temperature up to 1e6 K, without switching to the classical
+// limit (the step at 1000 K, where the number of summed rotational states
+// changes, is 2.2e-14 relative), so e(T) is monotone
+// over the bracket and the root is unique.  It is found by secant iteration in
+// log T (log-space bisection where that does not converge).  Measured
+// T -> e -> T round trips on H2-dominated compositions stay within 1.3e-11
+// relative over the whole bracket, and within 1.6e-12 for T >= 10 K.
 double model_T_from_e(const ModelCell& c, double e_cgs) noexcept;
+
+// Ohmic and ambipolar magnetic diffusivities [cm^2 s^-1] of the cell's
+// composition and nH at gas temperature T_K [K] and field strength B_G [G].
+// Charged particles are every charged species of the model (the grain charge
+// states over an MRN size distribution) colliding with H, H2 and He; the
+// formulas, rate coefficients and grain sizes are listed in
+// magnetic/resistivity.h.  Both values are quiet NaN unless nH and T_K are
+// positive and finite and B_G is non-negative and finite.  Without charged
+// particles both are +inf (eta_A = 0 when B_G = 0).
+struct MagneticDiffusivities {
+  double eta_O;  // Ohmic
+  double eta_A;  // ambipolar
+};
+MagneticDiffusivities model_resistivity(const ModelCell& c, double T_K,
+                                        double B_G) noexcept;
 
 // Advance one cell by dt (same kernel path as chem_full_step_<model>).
 // The cell must have been created from the same ModelRuntime (or one of the

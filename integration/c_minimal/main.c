@@ -42,8 +42,9 @@ int main(int argc, char** argv) {
   st.gamma = 5.0 / 3.0;
   arche_prim_cell_set_state(cell, &st);
 
-  /* Initialise to the library defaults (NOT the same as = {0}: esc_cnt
-   * defaults to 1.0 = optically thin), then set what you use. */
+  /* Initialise to the library defaults (NOT the same as = {0}: T_rad
+   * defaults to NaN, E_X_eV to 300 and the integrator tolerances to their
+   * documented values), then set what you use. */
   ArcheChemParams params;
   arche_chem_params_init(&params);
   params.T_rad = 2.725;

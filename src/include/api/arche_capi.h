@@ -30,7 +30,7 @@ extern "C" {
 
 // Network sizes (length of the species vector for each model).
 #define ARCHE_PRIM_NSP 23
-#define ARCHE_METAL_NSP 89
+#define ARCHE_METAL_NSP 95
 
 // Status codes returned by fallible functions.
 enum {
@@ -39,6 +39,30 @@ enum {
   ARCHE_ERR_RUNTIME = 2,           // std::runtime_error (e.g. table load)
   ARCHE_ERR_UNKNOWN = 3,           // any other exception
   ARCHE_ERR_NULL = 4               // a required pointer argument was NULL
+};
+
+// Integrator outcome codes of ArcheChemFullRates::failure_reason and
+// ::last_failure (the numeric values of arche::SolveFailure, core/state.h).
+enum {
+  ARCHE_SOLVE_NONE = 0,                 // success
+  ARCHE_SOLVE_MAX_ITERATIONS = 1,       // Newton iteration limit
+  ARCHE_SOLVE_STAGNATION = 2,           // not produced by this version
+  ARCHE_SOLVE_NONFINITE = 3,            // NaN/Inf in a residual or update
+  ARCHE_SOLVE_SINGULAR_JACOBIAN = 4,    // Newton matrix not factorisable
+  ARCHE_SOLVE_LINE_SEARCH = 5,          // damping found no acceptable step
+  ARCHE_SOLVE_TEMPERATURE_BRACKET = 6,  // no bracket for the temperature root
+  ARCHE_SOLVE_TEMPERATURE_ITERATIONS = 7,  // temperature root iteration limit
+  ARCHE_SOLVE_PROJECTION_REJECTED = 8,     // conservation projection declined
+  ARCHE_SOLVE_INVARIANTS_UNAVAILABLE = 9,  // table carries no invariant rows,
+                                           // so no step can be projected
+  ARCHE_SOLVE_OUTPUT_REJECTED = 10,        // local error above tolerance, or
+                                           // end state failed validation
+  ARCHE_SOLVE_THERMAL_REJECTED = 11,       // not produced by this version
+  ARCHE_SOLVE_INTERVAL_BUDGET = 12,        // internal_max_steps exhausted
+  ARCHE_SOLVE_NO_PROGRESS = 13,  // shortened below the interval's resolution
+                                 // by a rejection other than the local error,
+                                 // step too narrow to advance, or dt <= 0
+  ARCHE_SOLVE_COUNT = 14         // number of codes
 };
 
 // ── Opaque handles ─────────────────────────────────────────────────────────
@@ -58,20 +82,27 @@ typedef struct {
   double T_cr_desorp;  // effective CR desorption spike temperature [K]
   double H, H2, He;    // LTE-interpolation abundances (filled by kernel)
   double J_H2, J_H2O, J_tot;  // UV radiation field strengths (metal)
+  double internal_max_step;   // internal step bound [s]; infinity = none
+  // Error control of the integrator (see ChemParams in core/state.h).
+  double rtol, atol, rtol_T;   // relative / absolute (per H) / temperature
+  int internal_max_steps;      // attempted internal steps per call
+  int use_saha;                // 1 = Saha regime above saha_threshold_nH
+  double saha_threshold_nH;    // [cm^-3]
+  double saha_nonthermal_tol;  // allowed non-thermal shift of y_e (0 = never)
 } ArcheChemParams;
 
 typedef struct {
   double zeta;                // effective CR ionization rate [s^-1]
   double Nc_H, Nc_H2, Nc_HD;  // column densities [cm^-2]
-  double tau_cnt;             // continuum optical depth
-  double esc_cnt;             // continuum escape fraction (1 = optically thin)
-  double J_LW21;  // Lyman-Werner intensity [10^-21 erg/s/cm^2/Hz/sr]
+  double cnt_column;  // continuum shielding column rho*L [g cm^-2] (0 = thin)
+  double J_LW21;      // Lyman-Werner intensity [10^-21 erg/s/cm^2/Hz/sr]
   double Nc_CO, Nc_OH, Nc_H2O, Nc_CII, Nc_CI, Nc_OI;  // metal column densities
   double zeta_X;  // X-ray HI primary photoionization rate [s^-1]
   double E_X_eV;  // representative X-ray photon energy [eV]
 } ArcheChemShielding;
 
 typedef struct {
+  // Thermal fields are interval means; opacity/grain temperature are final values.
   double Lambda_net, Lambda_line, Lambda_cnt, Lambda_chem;  // aggregate cooling
   double Gamma_CR, Gamma_X;                                 // heating
   double Lambda_H2, Lambda_HD, Lambda_Lya;                  // per-line
@@ -79,20 +110,37 @@ typedef struct {
   double Lambda_CII, Lambda_CI, Lambda_OI;                  // per-line (metal)
   double Lambda_gr, Lambda_gas;                             // continuum split
   double k_gas, k_gr;                                       // opacities
-  double T_gr_K;                                            // solved grain temp
-  int solver_failed;  // 0 = ok, 1 = failed
-  // 0 = element/charge conservation was NOT enforced on this step, 1 = it was.
-  // See ChemFullRates::conservation_projected in core/state.h for the four
-  // reasons a 0 appears.  All four shipped networks register invariant rows
-  // (5 / 5 / 8 / 10), so the "no rows registered" reason does not apply to
-  // them: on a step that converged, a 0 means the projection itself declined.
+  double tau_cnt, esc_cnt;  // continuum depth and escape fraction (end state)
+  double T_gr_K;            // solved grain temp
+  int solver_failed;        // 0 = ok, 1 = failed
+  // 1 = every accepted internal step was projected onto the element and charge
+  // invariants (5 / 5 / 9 / 11 rows for the four shipped networks); 0 = the
+  // interval failed (solver_failed = 1).
   int conservation_projected;
+  int failure_reason;  // ARCHE_SOLVE_* code (ARCHE_SOLVE_NONE = success)
+  int newton_iterations, temperature_iterations;
+  double residual_norm, update_norm, temperature_norm;
+  int attempted_substeps, accepted_substeps, rejected_substeps, newton_total;
+  int last_failure;  // ARCHE_SOLVE_* code of the last rejected attempt
+  double completed_time, internal_step, residual_absolute,
+      projection_max_relative;
+  double saha_nonthermal_shift;  // -1 when not evaluated
+  // Net charge of the input relative to the charge carried, and 1 when the input
+  // was neutralised before the first internal step (SolveStatus, core/state.h).
+  double input_charge_imbalance;
+  int input_neutralized;
+  // Rejected attempts of the call by cause (index = ARCHE_SOLVE_* code), and the
+  // attempts rejected for last_failure in a row since the last accepted step with
+  // the width [s] of the first of them (SolveStatus, core/state.h).
+  int rejections_by_reason[ARCHE_SOLVE_COUNT];
+  int last_failure_run;
+  double last_failure_run_h;
 } ArcheChemFullRates;
 
 // ── Struct initialisers ─────────────────────────────────────────────────────
 // Set every field to the library default (matching the C++ defaults declared
 // in core/state.h).  Plain zero-initialisation (`= {0}`) is NOT equivalent:
-// the defaults include esc_cnt = 1.0 (optically thin), E_X_eV = 300,
+// the defaults include E_X_eV = 300,
 // T_cr_desorp = 70, and T_rad = NaN (a sentinel that forces the caller to set
 // it).  Call the initialiser first, then overwrite the fields you use.
 void arche_chem_params_init(ArcheChemParams* params);
@@ -226,6 +274,16 @@ void arche_model_cell_reset(ArcheModelCell* cell);
 double arche_model_mu_from_y(const ArcheModelCell* cell);
 double arche_model_gamma_from_y(const ArcheModelCell* cell, double T_K);
 double arche_model_T_from_e(const ArcheModelCell* cell, double e_cgs);
+
+// Ohmic and ambipolar magnetic diffusivities [cm^2 s^-1] at T_K [K] and field
+// strength B_G [G] (arche::model_resistivity).  Both fields are quiet NaN when
+// cell is NULL.
+typedef struct {
+  double eta_O;
+  double eta_A;
+} ArcheMagneticDiffusivities;
+ArcheMagneticDiffusivities arche_model_resistivity(const ArcheModelCell* cell,
+                                                   double T_K, double B_G);
 
 // Advance one cell by dt. Returns ARCHE_OK or an ARCHE_ERR_* code; on success
 // the cooling/heating breakdown is written to *out (out may be NULL).  The

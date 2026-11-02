@@ -26,6 +26,14 @@ void set_last_error(const char* msg) { g_last_error = msg ? msg : ""; }
 // ── Struct marshalling (field-by-field; order-independent, layout-agnostic) ──
 arche::ChemParams to_cpp(const ArcheChemParams& c) {
   arche::ChemParams p;
+  p.internal_max_step = c.internal_max_step;
+  p.rtol = c.rtol;
+  p.atol = c.atol;
+  p.rtol_T = c.rtol_T;
+  p.internal_max_steps = c.internal_max_steps;
+  p.use_saha = c.use_saha != 0;
+  p.saha_threshold_nH = c.saha_threshold_nH;
+  p.saha_nonthermal_tol = c.saha_nonthermal_tol;
   p.zeta = c.zeta;
   p.zeta_X = c.zeta_X;
   p.T_rad = c.T_rad;
@@ -47,8 +55,7 @@ arche::ChemShielding to_cpp(const ArcheChemShielding& c) {
   s.Nc_H = c.Nc_H;
   s.Nc_H2 = c.Nc_H2;
   s.Nc_HD = c.Nc_HD;
-  s.tau_cnt = c.tau_cnt;
-  s.esc_cnt = c.esc_cnt;
+  s.cnt_column = c.cnt_column;
   s.J_LW21 = c.J_LW21;
   s.Nc_CO = c.Nc_CO;
   s.Nc_OH = c.Nc_OH;
@@ -81,10 +88,67 @@ void from_cpp(const arche::ChemFullRates& r, ArcheChemFullRates& c) {
   c.Lambda_gas = r.Lambda_gas;
   c.k_gas = r.k_gas;
   c.k_gr = r.k_gr;
+  c.tau_cnt = r.tau_cnt;
+  c.esc_cnt = r.esc_cnt;
   c.T_gr_K = r.T_gr_K;
   c.solver_failed = r.solver_failed ? 1 : 0;
   c.conservation_projected = r.conservation_projected ? 1 : 0;
+  c.failure_reason = static_cast<int>(r.status.reason);
+  c.newton_iterations = r.status.newton_iterations;
+  c.temperature_iterations = r.status.temperature_iterations;
+  c.attempted_substeps = r.status.attempted_substeps;
+  c.accepted_substeps = r.status.accepted_substeps;
+  c.rejected_substeps = r.status.rejected_substeps;
+  c.newton_total = r.status.newton_total;
+  c.completed_time = r.status.completed_time;
+  c.internal_step = r.status.internal_step;
+  c.residual_absolute = r.status.residual_absolute;
+  c.projection_max_relative = r.status.projection_max_relative;
+  c.last_failure = static_cast<int>(r.status.last_failure);
+  c.residual_norm = r.status.residual_norm;
+  c.update_norm = r.status.update_norm;
+  c.temperature_norm = r.status.temperature_norm;
+  c.saha_nonthermal_shift = r.status.saha_nonthermal_shift;
+  c.input_charge_imbalance = r.status.input_charge_imbalance;
+  c.input_neutralized = r.status.input_neutralized ? 1 : 0;
+  for (int k = 0; k < ARCHE_SOLVE_COUNT; ++k)
+    c.rejections_by_reason[k] = r.status.rejections_by_reason[k];
+  c.last_failure_run = r.status.last_failure_run;
+  c.last_failure_run_h = r.status.last_failure_run_h;
 }
+
+// The ARCHE_SOLVE_* codes are the numeric values of arche::SolveFailure.
+static_assert(
+    static_cast<int>(arche::SolveFailure::none) == ARCHE_SOLVE_NONE &&
+        static_cast<int>(arche::SolveFailure::max_iterations) ==
+            ARCHE_SOLVE_MAX_ITERATIONS &&
+        static_cast<int>(arche::SolveFailure::stagnation) ==
+            ARCHE_SOLVE_STAGNATION &&
+        static_cast<int>(arche::SolveFailure::nonfinite) ==
+            ARCHE_SOLVE_NONFINITE &&
+        static_cast<int>(arche::SolveFailure::singular_jacobian) ==
+            ARCHE_SOLVE_SINGULAR_JACOBIAN &&
+        static_cast<int>(arche::SolveFailure::line_search) ==
+            ARCHE_SOLVE_LINE_SEARCH &&
+        static_cast<int>(arche::SolveFailure::temperature_bracket) ==
+            ARCHE_SOLVE_TEMPERATURE_BRACKET &&
+        static_cast<int>(arche::SolveFailure::temperature_iterations) ==
+            ARCHE_SOLVE_TEMPERATURE_ITERATIONS &&
+        static_cast<int>(arche::SolveFailure::projection_rejected) ==
+            ARCHE_SOLVE_PROJECTION_REJECTED &&
+        static_cast<int>(arche::SolveFailure::invariants_unavailable) ==
+            ARCHE_SOLVE_INVARIANTS_UNAVAILABLE &&
+        static_cast<int>(arche::SolveFailure::output_rejected) ==
+            ARCHE_SOLVE_OUTPUT_REJECTED &&
+        static_cast<int>(arche::SolveFailure::thermal_rejected) ==
+            ARCHE_SOLVE_THERMAL_REJECTED &&
+        static_cast<int>(arche::SolveFailure::interval_budget) ==
+            ARCHE_SOLVE_INTERVAL_BUDGET &&
+        static_cast<int>(arche::SolveFailure::no_progress) ==
+            ARCHE_SOLVE_NO_PROGRESS,
+    "ARCHE_SOLVE_* must match arche::SolveFailure");
+static_assert(arche::kSolveFailureCount == ARCHE_SOLVE_COUNT,
+              "ARCHE_SOLVE_COUNT must match arche::kSolveFailureCount");
 
 // Map a caught exception to an ARCHE_ERR_* code (and record its message).
 template <class Fn>
@@ -117,6 +181,14 @@ extern "C" {
 void arche_chem_params_init(ArcheChemParams* params) {
   if (!params) return;
   const arche::ChemParams d;
+  params->internal_max_step = d.internal_max_step;
+  params->rtol = d.rtol;
+  params->atol = d.atol;
+  params->rtol_T = d.rtol_T;
+  params->internal_max_steps = d.internal_max_steps;
+  params->use_saha = d.use_saha ? 1 : 0;
+  params->saha_threshold_nH = d.saha_threshold_nH;
+  params->saha_nonthermal_tol = d.saha_nonthermal_tol;
   params->zeta = d.zeta;
   params->zeta_X = d.zeta_X;
   params->T_rad = d.T_rad;
@@ -137,8 +209,7 @@ void arche_chem_shielding_init(ArcheChemShielding* shield) {
   shield->Nc_H = d.Nc_H;
   shield->Nc_H2 = d.Nc_H2;
   shield->Nc_HD = d.Nc_HD;
-  shield->tau_cnt = d.tau_cnt;
-  shield->esc_cnt = d.esc_cnt;
+  shield->cnt_column = d.cnt_column;
   shield->J_LW21 = d.J_LW21;
   shield->Nc_CO = d.Nc_CO;
   shield->Nc_OH = d.Nc_OH;
@@ -430,6 +501,14 @@ double arche_model_T_from_e(const ArcheModelCell* cell, double e_cgs) {
   if (!cell) return std::numeric_limits<double>::quiet_NaN();
   return arche::model_T_from_e(*reinterpret_cast<const arche::ModelCell*>(cell),
                                e_cgs);
+}
+ArcheMagneticDiffusivities arche_model_resistivity(const ArcheModelCell* cell,
+                                                   double T_K, double B_G) {
+  constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
+  if (!cell) return ArcheMagneticDiffusivities{kNaN, kNaN};
+  const arche::MagneticDiffusivities d = arche::model_resistivity(
+      *reinterpret_cast<const arche::ModelCell*>(cell), T_K, B_G);
+  return ArcheMagneticDiffusivities{d.eta_O, d.eta_A};
 }
 int arche_model_step(const ArcheModelRuntime* model, ArcheModelCell* cell,
                      double dt, const ArcheChemParams* params,

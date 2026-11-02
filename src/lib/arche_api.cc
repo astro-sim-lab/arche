@@ -5,7 +5,7 @@
 // arche_api.cc — implementation of the non-template public facade.
 //
 // This is the single translation unit that includes the full templated kernel
-// (chemistry.h, which pulls in Eigen via chemreact.h and HDF5 via
+// (chemistry.h, which pulls in Eigen via core/newton.h and HDF5 via
 // kinetics/topology.h) and instantiates it for the two supported models.
 // Linking libarche therefore gives an external application the complete
 // chemistry kernel without recompiling any template and without seeing
@@ -14,7 +14,7 @@
 //   * The opaque handles declared in arche_api.h (PrimCell / MetalCell /
 //     PrimTable / MetalTable) are defined here as thin wrappers over the
 //     concrete kernel types (ChemCell<Model> / ReactionTable<...>).
-//   * chem_(full_)step<Nakauchi2019|Nakauchi2021> are explicitly instantiated
+//   * chem_full_step<Nakauchi2019|Nakauchi2021> are explicitly instantiated
 //     below so the kernel object code lives here, in libarche, once.
 // ---------------------------------------------------------------------------
 #include "api/arche_api.h"
@@ -26,9 +26,10 @@
 #include <utility>
 #include <vector>
 
-#include "solve/chemistry.h"  // ChemCell<Model>, chem_(full_)step<Model>,
+#include "solve/chemistry.h"  // ChemCell<Model>, chem_full_step<Model>,
                               // make_*_table, <model>::net::init_topology,
                               // load_pf_tables_h5, ReactionTable<...>
+#include "magnetic/resistivity.h"
 #include "thermo/eos.h"
 
 namespace arche {
@@ -52,7 +53,7 @@ struct MetalCell {
   MetalGrainCell impl;
 };
 struct MetalMinimalCell {
-  // Compact 40-species / 103+10-reaction metal minimal network.
+  // Compact 44-species / 103+10-reaction metal minimal network.
   ChemCell<Nakauchi2021_Minimal> impl;
 };
 struct PrimTable {
@@ -70,8 +71,8 @@ struct MetalMinimalTable {
 static_assert(zero_metal_minimal::N_sp == 15,
               "ChemStatePrimMinimal in arche_api.h assumes 15 compact species");
 static_assert(
-    metal_grain_minimal::N_sp == 40,
-    "ChemStateMetalMinimal in arche_api.h assumes 40 compact species");
+    metal_grain_minimal::N_sp == 44,
+    "ChemStateMetalMinimal in arche_api.h assumes 44 compact species");
 
 // ── Cell lifecycle ─────────────────────────────────────────────────────────
 PrimCell* prim_cell_create() { return new PrimCell(); }
@@ -151,7 +152,7 @@ MetalMinimalTable* load_metal_minimal_table(const std::string& h5_path) {
   auto* tbl = new MetalMinimalTable();
   try {
     // Build the full PF-loaded table once, then derive the compact table
-    // (which retains the full table via aux_full_metal for the strategy-1 rate
+    // (which retains the full table via aux_full_metal for the compact rate
     // path and the compact Saha).
     tbl->impl = make_metal_minimal_table(make_metal_grain_table(h5_path));
   } catch (...) {
@@ -226,25 +227,6 @@ ChemFullRates chem_full_step_metal_minimal(MetalMinimalCell& cell, double dt,
                                            const MetalMinimalTable& tbl) {
   return chem_full_step<Nakauchi2021_Minimal>(cell.impl, dt, params, shield,
                                               tbl.impl);
-}
-
-ChemRates chem_step_prim(PrimCell& cell, double dt, const ChemParams& params,
-                         const PrimTable& tbl) {
-  return chem_step<Nakauchi2019>(cell.impl, dt, params, tbl.impl);
-}
-ChemRates chem_step_prim_minimal(PrimMinimalCell& cell, double dt,
-                                 const ChemParams& params,
-                                 const PrimMinimalTable& tbl) {
-  return chem_step<Nakauchi2019_Minimal>(cell.impl, dt, params, tbl.impl);
-}
-ChemRates chem_step_metal(MetalCell& cell, double dt, const ChemParams& params,
-                          const MetalTable& tbl) {
-  return chem_step<Nakauchi2021>(cell.impl, dt, params, tbl.impl);
-}
-ChemRates chem_step_metal_minimal(MetalMinimalCell& cell, double dt,
-                                  const ChemParams& params,
-                                  const MetalMinimalTable& tbl) {
-  return chem_step<Nakauchi2021_Minimal>(cell.impl, dt, params, tbl.impl);
 }
 
 // ---------------------------------------------------------------------------
@@ -362,21 +344,9 @@ template ChemFullRates chem_full_step<Nakauchi2021>(MetalGrainCell&, double,
                                                     const ChemParams&,
                                                     const ChemShielding&,
                                                     const MetalGrainTable&);
-template ChemRates chem_step<Nakauchi2019>(ZeroMetalCell&, double,
-                                           const ChemParams&,
-                                           const ZeroMetalTable&);
-template ChemRates chem_step<Nakauchi2019_Minimal>(
-    ChemCell<Nakauchi2019_Minimal>&, double, const ChemParams&,
-    const zero_metal_minimal::MinimalTable&);
-template ChemRates chem_step<Nakauchi2021>(MetalGrainCell&, double,
-                                           const ChemParams&,
-                                           const MetalGrainTable&);
 template ChemFullRates chem_full_step<Nakauchi2021_Minimal>(
     ChemCell<Nakauchi2021_Minimal>&, double, const ChemParams&,
     const ChemShielding&, const metal_grain_minimal::MinimalTable&);
-template ChemRates chem_step<Nakauchi2021_Minimal>(
-    ChemCell<Nakauchi2021_Minimal>&, double, const ChemParams&,
-    const metal_grain_minimal::MinimalTable&);
 
 // ---------------------------------------------------------------------------
 // Registry-backed type-erased models (name-selected; species metadata).
@@ -401,6 +371,8 @@ struct IModelCell {
   virtual double mu_from_y() const noexcept = 0;
   virtual double gamma_from_y(double T_K) const noexcept = 0;
   virtual double T_from_e(double e_cgs) const noexcept = 0;
+  virtual magnetic::Diffusivities resistivity(double T_K,
+                                              double B_G) const noexcept = 0;
 };
 
 struct IModelRuntime {
@@ -438,6 +410,11 @@ struct ModelCellImpl final : IModelCell {
   double T_from_e(double e_cgs) const noexcept override {
     return thermo::temperature_from_specific_internal_energy<Model>(
         cell.state.y, e_cgs);
+  }
+  magnetic::Diffusivities resistivity(double T_K,
+                                      double B_G) const noexcept override {
+    return magnetic::diffusivities<Model>(cell.state.y.data(), cell.state.nH,
+                                          T_K, B_G);
   }
 };
 
@@ -486,7 +463,7 @@ std::unique_ptr<IModelRuntime> make_metal(const std::string& h5) {
 }
 std::unique_ptr<IModelRuntime> make_metal_minimal(const std::string& h5) {
   // The compact table carries the full PF-loaded table (aux_full_metal) for the
-  // strategy-1 rate path and the compact Saha.
+  // compact rate path and the compact Saha.
   return std::make_unique<ModelRuntimeImpl<Nakauchi2021_Minimal>>(
       "Nakauchi2021_Minimal",
       make_metal_minimal_table(make_metal_grain_table(h5)));
@@ -564,6 +541,11 @@ double model_gamma_from_y(const ModelCell& c, double T_K) noexcept {
 }
 double model_T_from_e(const ModelCell& c, double e_cgs) noexcept {
   return c.impl->T_from_e(e_cgs);
+}
+MagneticDiffusivities model_resistivity(const ModelCell& c, double T_K,
+                                        double B_G) noexcept {
+  const magnetic::Diffusivities d = c.impl->resistivity(T_K, B_G);
+  return MagneticDiffusivities{d.eta_O, d.eta_A};
 }
 
 ChemFullRates model_step(const ModelRuntime& m, ModelCell& c, double dt,
