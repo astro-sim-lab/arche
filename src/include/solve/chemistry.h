@@ -377,13 +377,20 @@ ChemFullRates chem_integrate_adaptive(
   // only (lambda_D / L)^2 of its electrons, decades below double precision, so a
   // charged input is a defect of the caller's state (transport, floors, an initial
   // condition), not physics.  Every step projects its end state onto zero net charge
-  // and is refused when that repair exceeds the error weights; an input imbalance makes
-  // the repair independent of the step width, and no step could be accepted.  An input
-  // whose neutralisation exceeds the weights is therefore projected once here, by the
-  // same element-preserving projection (each species shifted by at most
-  // conservation::kMaxRelShift of itself; beyond that the input is rejected), and
-  // SolveStatus reports it.  A smaller imbalance is left to the steps' own projection,
-  // so a neutral input is integrated exactly as before.
+  // and is refused when that repair exceeds the error weights or the projection's
+  // limit (each species shifted by at most conservation::kMaxRelShift of itself, so a
+  // charge residual above kMaxRelShift / max|q| of SUM q^2 y -- a multiply charged
+  // species counts even when it is absent); an input imbalance makes the repair
+  // independent of the step width, and no step could be accepted.  Any charged input
+  // is therefore tried against the same element-preserving projection here:
+  //   the projection accepts it: an imbalance whose neutralisation exceeds the error
+  //     weights is projected once here, and SolveStatus reports it; a smaller one is
+  //     left to the steps' own projection, so a neutral input is integrated exactly as
+  //     before;
+  //   the projection declines and |net| <= atol: the imbalance is moved onto the
+  //     electrons (y_e += net), which carry no element; the change is inside every
+  //     error weight;
+  //   otherwise the input is rejected.
   if (tbl.n_invariants > 0 && tbl.charge_invariant_row >= 0) {
     const double* q = tbl.invariants.data() +
                       static_cast<std::size_t>(tbl.charge_invariant_row) * N_sp;
@@ -393,19 +400,27 @@ ChemFullRates chem_integrate_adaptive(
       carried += std::abs(q[i]) * cell.state.y[i];
     }
     st.input_charge_imbalance = carried > 0.0 ? std::abs(net) / carried : 0.0;
-    if (std::abs(net) > tol.atol) {
-      std::array<double, N_sp> yn = cell.state.y;
+    std::array<double, N_sp> yn = cell.state.y;
+    if (net != 0.0) {
       std::array<double, conservation::kMaxRows> no_carry{};
       if (!conservation::project<N_sp>(tbl.invariants.data(), tbl.n_invariants,
                                        tbl.charge_invariant_row, cell.state.y,
                                        yn, no_carry)) {
-        throw std::invalid_argument(
-            "chem_full_step: the input's net charge (" +
-            std::to_string(st.input_charge_imbalance) +
-            " of the charge carried) cannot be neutralised within "
-            "conservation::kMaxRelShift; the input state must be "
-            "charge-neutral");
+        using Sp = typename Model::Sp;
+        const double ye = cell.state.y[Sp::e] + net;
+        if (std::abs(net) <= tol.atol && ye >= 0.0) {
+          cell.state.y[Sp::e] = ye;
+        } else {
+          throw std::invalid_argument(
+              "chem_full_step: the input's net charge (" +
+              std::to_string(st.input_charge_imbalance) +
+              " of the charge carried) cannot be neutralised within "
+              "conservation::kMaxRelShift; the input state must be "
+              "charge-neutral");
+        }
       }
+    }
+    if (std::abs(net) > tol.atol) {
       for (int i = 0; i < N_sp && !st.input_neutralized; ++i) {
         const double w =
             tol.atol +

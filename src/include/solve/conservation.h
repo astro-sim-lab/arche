@@ -51,7 +51,8 @@
 // orders of magnitude along the collapse.
 // A charged input is neutralised once, before the first step, by this projection
 // (chem_integrate_adaptive in solve/chemistry.h) and rejected when that needs more
-// than kMaxRelShift.  The guard bounds the per-species RELATIVE shift, and for a pure charge residual
+// than kMaxRelShift, unless its net charge is at most atol: that is moved onto the
+// electrons instead.  The guard bounds the per-species RELATIVE shift, and for a pure charge residual
 // shift_i = q_i * lambda_q with lambda_q = r_q / SUM_i y_i q_i^2, so the
 // projection declines once
 //     |SUM_i q_i y_i|  >  (kMaxRelShift / max_i|q_i|) * SUM_i y_i q_i^2
