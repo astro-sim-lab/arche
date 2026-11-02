@@ -32,7 +32,9 @@
 //
 // Convergence: the weighted RMS of the Newton correction,
 //   w = sqrt( (sum_i (dy_i/(atol + rtol|y_i|))^2 + (dT/(rtol_T T))^2) / (N+1) ),
-// is at most kNewtonKappa. There is no absolute threshold: an absolute one cannot
+// is at most kNewtonKappa. After a damped update the full correction is the simplified
+// Newton correction at the trial point: the damped update's own size says nothing about
+// the distance to the root. There is no absolute threshold: an absolute one cannot
 // resolve abundances spread over 50 decades.
 //
 // Error control: step doubling. Each attempt solves one step of width h and two of h/2
@@ -851,7 +853,7 @@ StepResult<Model> coupled_step(
   Eval<Model> ev;
   evaluate<Model>(c, x, T, &ev);
   bool converged = false;
-  double last_w = std::numeric_limits<double>::infinity();
+  bool ev_at_x = true;  // ev was evaluated at the current iterate (x, T)
 
   std::array<double, M * M> A{};
   // The factorisation lives here and is copied from / to lu_work: Eigen's vectorised
@@ -922,17 +924,21 @@ StepResult<Model> coupled_step(
       for (int i = 0; i < M; ++i) d[i] = -ev.F[i];
       lu.solve(d);
     }
+    // Weighted RMS of the full (undamped) correction at the iterate.
+    std::array<double, N> xf{};
+    for (int i = 0; i < N; ++i) {
+      const double v = x[i] + d[i];
+      xf[i] = v < 0.0 ? 0.1 * x[i] : v;
+    }
+    const double Tf = T + d[N] * T0;
+    const double full_w = Tf > 1.0 ? wnorm_step(x, T, xf, Tf)
+                                   : std::numeric_limits<double>::infinity();
     if (!inherited) {  // the full correction is already inside the tolerance: stop
-      std::array<double, N> xf{};
-      for (int i = 0; i < N; ++i) {
-        const double v = x[i] + d[i];
-        xf[i] = v < 0.0 ? 0.1 * x[i] : v;
-      }
-      const double Tf = T + d[N] * T0;
-      if (Tf > 1.0 && wnorm_step(x, T, xf, Tf) <= kNewtonKappa) {
+      if (full_w <= kNewtonKappa) {
         if (!end_rates) {  // the caller uses only the end state (y, T)
           x = xf;
           T = Tf;
+          ev_at_x = false;
           converged = true;
           break;
         }
@@ -988,19 +994,34 @@ StepResult<Model> coupled_step(
         --it;
         continue;
       }
-      if (last_w <=
-          1.0)  // damping stalled with the last update inside the tolerance
+      if (full_w <=
+          1.0)  // damping stalled with the full correction inside the tolerance
         converged = true;
       else
         out.reason = SolveFailure::line_search;
       break;
     }
     inherited = false;
-    last_w = wnorm_step(x, T, xt, Tt);
+    // Convergence is measured by a full correction, never by a damped update (a small
+    // damping factor shrinks the update without bringing the iterate closer to the
+    // root): an undamped step's own size, or after a damped one the simplified Newton
+    // correction dbar at the trial point, with a Jacobian factorised at this iterate.
+    bool close_to_root = false;
+    if (alpha == 1.0) {
+      close_to_root = wnorm_step(x, T, xt, Tt) <= kNewtonKappa;
+    } else if (jacobian_fresh) {
+      std::array<double, N> xb{};
+      for (int i = 0; i < N; ++i) {
+        const double v = xt[i] + dbar[i];
+        xb[i] = v < 0.0 ? 0.1 * xt[i] : v;
+      }
+      const double Tb = Tt + dbar[N] * T0;
+      close_to_root = Tb > 1.0 && wnorm_step(xt, Tt, xb, Tb) <= kNewtonKappa;
+    }
     x = xt;
     T = Tt;
     ev = et;
-    if (last_w <= kNewtonKappa) {
+    if (close_to_root) {
       converged = true;
       break;
     }
@@ -1026,7 +1047,10 @@ StepResult<Model> coupled_step(
   out.y = x;
   out.T = T;
   out.var = ev.var;
-  out.L_chem = ev.L_chem;
+  // Carry the energy residual left at convergence into the chemistry heat, as
+  // fixed_T_step does, so that e0 - h*Lambda_net is the end state's energy e(y, T).
+  // (Without end rates ev is stale, and the caller reads only y and T.)
+  out.L_chem = ev_at_x ? ev.L_chem - ev.F[N] * c.e0 / h : ev.L_chem;
   out.Gamma = ev.Gamma;
   out.rad_mean = mean_rates(c.rad_start, ev.rad_end);
   out.rad_end = ev.rad_end;

@@ -191,9 +191,14 @@ inline void grtemp(double nH, double T_gas, double tau_cnt, double esc_cnt,
 
   double f0 = func(T_gr);
   if (f0 == 0.0) {
-    T_gr = T_gas;
+    // func vanishes identically once the dust has evaporated (kp = vol_gr = 0):
+    // T_gr = T_gas. Otherwise the guess is itself a root (a previous call's result
+    // passed back in) and is kept.
+    const bool evaporated =
+        detail::kp_gr(rho, T_gr) == 0.0 && detail::vol_gr(rho, T_gr) == 0.0;
+    T_gr = evaporated ? T_gas : std::min(T_gr, T_gas);
     return;
-  }  // dust evaporated: kp≈0,vol_gr≈0 → T_gr=T_gas
+  }
 
   double x_l = T_gr, x_u = T_gr;
   if (f0 > 0.0) {
@@ -303,10 +308,14 @@ inline void grtemp_consistent(double nH, double T_gas, double column,
 
   const double f0 = func(T_gr);
   if (f0 == 0.0) {
-    T_gr = T_gas;
+    // As in grtemp: T_gr = T_gas only when the dust has evaporated; otherwise the
+    // guess is a root and is kept.
+    const bool evaporated =
+        detail::kp_gr(rho, T_gr) == 0.0 && detail::vol_gr(rho, T_gr) == 0.0;
+    T_gr = evaporated ? T_gas : std::min(T_gr, T_gas);
     finish();
     return;
-  }  // dust evaporated: kp≈0,vol_gr≈0 → T_gr=T_gas
+  }
 
   // Bracket by 1% steps away from the guess; the guess is the other end.
   double x_l = T_gr, x_u = T_gr, f_l = f0, f_u = f0;
