@@ -8,11 +8,12 @@ One-zone gravitational collapse and standalone chemistry integration for
 **primordial (zero-metal)** and **metal-grain** gas, implemented in C++17.
 
 This repository provides collapse applications (`prim_collapse`, `metal_collapse`),
-standalone chemistry demos (`prim_chem`, `metal_chem`), and a unified wrapper
+standalone chemistry demos (`prim_chem`, `metal_chem`), a magnetic-diffusivity
+post-processor (`magnetic_reynolds`), and a unified wrapper
 (`run_collapse.sh`) for build → simulate → plot → resample workflows. Both
 sides also ship compact **minimal** networks for lighter-weight runs:
 `Nakauchi2019_Minimal` (15 species), selectable with `--minimal`, and
-`Nakauchi2021_Minimal` (40 species), selectable with `--metal-minimal`. The
+`Nakauchi2021_Minimal` (44 species), selectable with `--metal-minimal`. The
 chemistry network is additionally packaged as an embeddable C/C++ library
 (`libarche`) for coupling to an external hydro code — see
 [`integration/`](integration/README.md).
@@ -24,7 +25,9 @@ For setup and full usage details, see:
 - `docs/parameters.md`
 - `docs/api_reference.md`
 - `docs/output_schema.md`
+- `docs/magnetic_resistivity.md` (Ohmic and ambipolar diffusivities)
 - `integration/README.md` (using ARCHE as a library)
+- `docs/release_notes.md` (changes between releases, migration from 1.x)
 
 Official companion tool:
 - [ResiTable](https://github.com/astro-sim-lab/resitable)
@@ -33,14 +36,14 @@ Official companion tool:
 
 ## Physics Coverage
 
-### Density and temperature (default)
+### Density (default)
 
-| Mode    | n<sub>H,init</sub> [cm⁻³] | n<sub>H,stop</sub> [cm⁻³] | T<sub>max</sub> [K] |
-|---------|:--------------------------:|:--------------------------:|:-------------------:|
-| prim    | 0.1                        | 10²³                       | 10⁵                 |
-| metal   | 0.1                        | 10²³                       | 10⁵                 |
+| Mode    | n<sub>H,init</sub> [cm⁻³] | n<sub>H,stop</sub> [cm⁻³] |
+|---------|:--------------------------:|:--------------------------:|
+| prim    | 0.1                        | 10²³                       |
+| metal   | 0.1                        | 10²³                       |
 
-n<sub>H,stop</sub> is the default density ceiling (`PRIM_XNH_STOP` / `METAL_XNH_STOP`); the run may terminate earlier if T exceeds T<sub>max</sub>.
+n<sub>H,stop</sub> is the default density ceiling (`PRIM_XNH_STOP` / `METAL_XNH_STOP`); there is no temperature ceiling.
 
 ### Input parameters
 
@@ -111,7 +114,7 @@ bash run_collapse.sh \
 bash run_collapse.sh \
   --no-metal \
   --prim-zeta0 1e-17 \
-  --prim-jlw21 1e3 \
+  --prim-jlw21 1e5 \
   --prim-redshift 20 \
   --fig-combo \
   --no-resample \
