@@ -332,17 +332,24 @@ The net charge stays ≤ 8.4e-16 of the positive charge.
 Pass a charge-neutral state (e.g. `y[e] ≈ y[H+] + y[He+] + …`). Over any fluid
 cell a plasma can hold a net charge of only (λ_D / L)² of its electrons, with
 λ_D = 6.90 cm (T/K)^½ (n_e/cm⁻³)^−½ the Debye length, so a charged input is a
-numerical defect of the caller's state, not physics. `chem_full_step` treats it in
-three ways:
+numerical defect of the caller's state, not physics. The projection that
+neutralises it shifts every species by at most 1e-2 of itself
+(`conservation::kMaxRelShift`). A species of charge q moves by q times the
+electrons' share, and multiply charged species count even when they are absent, so
+it neutralises a net charge up to (1e-2 / max|q|) · Σ qᵢ² yᵢ: 3.33e-3 of it for
+`Nakauchi2019` (Li³⁺) and 1e-2 for `Nakauchi2019_Minimal`. `chem_full_step` treats
+a charged input in four ways:
 
-- |net charge| ≤ `atol`, or neutralising it would move no abundance by more than
-  its error weight: the input is integrated as given, and the steps' own
-  projections remove the imbalance.
-- Larger, but neutralisable with every species shifted by at most 1e-2 of itself
-  (`conservation::kMaxRelShift`): the input is projected once onto zero net
+- Neutralisable, and neutralising it would move no abundance by more than its
+  error weight: the input is integrated as given, and the steps' own projections
+  remove the imbalance.
+- Neutralisable, with a larger repair: the input is projected once onto zero net
   charge (element totals kept) before the first internal step.
   `status.input_neutralized` (C: `input_neutralized`) is then `true`.
-- Beyond that: `std::invalid_argument` (C: `ARCHE_ERR_INVALID_ARGUMENT`), and the
+- Not neutralisable, but |net charge| ≤ `atol`: the net charge is moved onto the
+  electrons (`y[e] += Σ qᵢ yᵢ`), which carry no element. The change is at most
+  `atol`, inside every error weight, and `input_neutralized` stays `false`.
+- Otherwise: `std::invalid_argument` (C: `ARCHE_ERR_INVALID_ARGUMENT`), and the
   cell is not modified.
 
 `status.input_charge_imbalance` reports the input's |Σ qᵢ yᵢ| / Σ |qᵢ| yᵢ in every
@@ -488,7 +495,11 @@ is the energy of its end state, so your EOS inversion recovers that temperature.
 **On solver failure** `solver_failed == true`: the cell state is left rolled back
 (unchanged) and the rates are not meaningful. The kernel has already shortened its
 internal steps under its own error control before giving up (`status.reason` says
-why), so carry the old state rather than retrying with a smaller `dt`.
+why). The outcome can still depend on `dt`: `no_progress` stops once refused
+attempts shorten the step below `8ε·dt`, a floor that grows with `dt`, so a call that
+fails can succeed over a shorter `dt` (e.g. `nH` = 1e22 cm⁻³ with `cnt_column` = 0
+fails at `dt` = 1e9 s and succeeds at `dt` ≤ 1e8 s; the free-fall time there is
+1.4e4 s). Retrying the interval in shorter calls is therefore a valid recovery.
 
 `status.reason` (C: `failure_reason`) is the outcome of the call and
 `status.last_failure` (C: `last_failure`) the cause of the last rejected internal
@@ -740,7 +751,15 @@ It integrates the interval `dt` with the error-controlled backward Euler of
    each changed by at most 10% since that call. Each attempt solves one step of width
    `h` and two of `h/2` from the same start (step doubling); the difference, in the
    weighted norm of `rtol`/`atol`/`rtol_T`, is the local error, and `h` is shortened
-   or grown from it.
+   or grown from it. The tolerances bound this local error (an RMS over the species
+   and T, so one component may exceed its weight), not the accuracy of the call's
+   result: the steps are first order, so the error accumulated over a call falls
+   only as about `rtol`^½. Over one call of `dt` = 1e9 s at `nH` = 1e14 cm⁻³
+   (`Nakauchi2019`), `rtol` = `rtol_T` = 1e-4 leaves abundances off by up to 1.2e-2
+   of themselves against `rtol` = 1e-9. In the collapse applications the error from
+   the outer time step dominates instead: tightening `rtol` and `rtol_T` from 1e-4
+   to 1e-7 moves T by ≤ 8.4e-5 dex (`Nakauchi2019` and `Nakauchi2021_Minimal` at
+   Z = 1e-3, ζ = 1e-17 s⁻¹).
 3. Each step solves the abundances and the specific internal energy in **one** Newton
    system: `y − y0 − h·r(y, T) = 0` and
    `e(y, T) − e0 + h·(Lambda_chem + (Lambda_rad(start) + Lambda_rad(end))/2 − Gamma_CR) = 0`,

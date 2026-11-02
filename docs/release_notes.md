@@ -92,9 +92,40 @@ Numerical output is not bit-identical to 1.1.0.
 - A charged input state is neutralised once, element totals kept, before the
   first internal step when its imbalance exceeds the error weights, and rejected
   with `std::invalid_argument` when that would shift a species by more than 1e-2
-  of itself. `SolveStatus` reports `input_charge_imbalance` and
+  of itself, unless the net charge is at most `atol`: such an imbalance is moved
+  onto the electrons instead. `SolveStatus` reports `input_charge_imbalance` and
   `input_neutralized` (C: the same fields of `ArcheChemFullRates`). 1.1.0 repaired
   such a state at every step without reporting it.
+- The metals locked in the dust are released when the grain temperature reaches
+  0.975 T_pyr; 1.1.0 compared the gas temperature. Where the gas is much hotter
+  than the grains the release moves to higher density: with
+  `Nakauchi2021_Minimal` at ζ = 1e-17 s⁻¹ and Z = 1e-6, half of the Mg is back in
+  the gas at n_H = 2.0e16 cm⁻³ instead of 4.8e11 cm⁻³ (where 1.1.0 had T = 1274 K
+  and T_gr = 429 K). At Z = 1e-5 and 1e-3 the density changes by ≤ 1.1%.
+- Outside its table the gas continuum opacity takes the table's edge value: the
+  row's last tabulated value above the tabulated density range, and the 750 K value
+  below 750 K. 1.1.0 returned 1e5 cm² g⁻¹ and 0 there; at n_H = 1e19 cm⁻³ the
+  former is 8 decades above the edge value for T < 1310 K. Below log R = −5
+  (R = ρ / T₆³) the opacity is still 0.
+- The grain temperature solver keeps an initial guess that is already an exact
+  root; it set T_gr = T_gas whenever the residual vanished at the guess (as in
+  1.1.0). Warm-started from its own previous result, the solver hits an exact root
+  most often in builds without FMA contraction (e.g. clang without
+  `-march=native`), where the jump in grain cooling stopped metal collapses with
+  e ≤ 0 before this fix.
+- Collisional ionisation of H, He and He⁺ (`r0`, `r2`, `r4`): below
+  T* = 11959 K, 15512 K and 85254 K the fit's prefactor k exp(ΔE/kT) is held at its
+  value at T*. The eighth-order fits otherwise grow without bound below T* (by
+  1e17, 1e28 and 1e112 at 1000 K), and so do the three-body recombinations derived
+  from them by detailed balance.
+- H + Li → LiH + γ (Bovino et al. 2011, reaction 3) is held at its value at its
+  minimum, T* = 13722 K, above T*. The fit otherwise overflows near 1.2e5 K.
+- Primordial reaction table: the detailed-balance constants (delE, Cmass) of 111
+  of the 139 rows are the values implied by the Saha formation reactions, to six
+  significant digits instead of three, so the network's equilibrium coincides with
+  the Saha branch. delE changes by ≤ 1.2% and Cmass by ≤ 0.6%; at 866 K the reverse
+  rates of the H, He and H₂ rows change by up to a factor 1.51
+  (e + H₃⁺ → H + H₂).
 - A call whose attempts keep being rejected for a cause other than the local
   error stops once those rejections shorten the step below the interval's
   resolution 8ε·dt, after at most ~25 shortenings, with
@@ -107,6 +138,21 @@ Numerical output is not bit-identical to 1.1.0.
 - The HDF5 `description` attribute of the collapse outputs reads
   `"zero-metal one-zone collapse CR<tag>"` and
   `"metal_grain one-zone collapse CR<tag> Z<tag>"`.
+
+### Known limitations
+
+- Without the 1.x ceiling the temperature can exceed 1e6 K, where the gas
+  opacity is extrapolated beyond its table and the rate coefficients and cooling
+  functions are used above 1e5 K, the limit to which 1.x was run. With
+  `J_LW21 = 1e5` (README case 3) T passes 1e6 K at n_H = 8.1e22 cm⁻³
+  (`Nakauchi2019`; 5.5e22 cm⁻³ for `Nakauchi2019_Minimal`) and reaches 1.16e6 K
+  (1.49e6 K) at 1e23 cm⁻³.
+- `rtol`, `atol` and `rtol_T` bound the local error of each internal step, not the
+  accuracy of a call: the error accumulated over a call falls only as about
+  `rtol`^½ ([`api_reference.md`](api_reference.md) §8).
+- Abundances below `atol` are not error-controlled. Where every charged particle
+  lies below it, the ambipolar diffusivity depends on `atol` by several decades
+  ([`magnetic_resistivity.md`](magnetic_resistivity.md)).
 
 ### Migrating from 1.x
 
@@ -123,7 +169,9 @@ Numerical output is not bit-identical to 1.1.0.
    headers and `libarche.a`.
 5. Pass charge-neutral states; check `status.input_neutralized` to find where the
    caller produces charged ones.
-6. Treat `solver_failed` as final for that call: the kernel has already shortened
-   its internal steps, and `status.reason` gives the cause.
+6. On `solver_failed` the cell is unchanged and `status.reason` gives the cause.
+   The kernel has already shortened its internal steps; a `no_progress` failure
+   can still succeed when the interval is split into shorter calls
+   ([`api_reference.md`](api_reference.md) §6).
 7. Re-generate any stored reference outputs: results change at the level of the
    integrator tolerances.

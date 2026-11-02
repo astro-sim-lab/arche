@@ -66,6 +66,20 @@ Two exact rearrangements remove the cancellations of these expressions.
 - With no charged particle (σ_O = 0), η_O = +∞, and η_A = +∞ for B > 0.
 - η_A = 0 for B = 0.
 
+### Accuracy of the input abundances
+
+The chemistry integrator controls each abundance only down to `ChemParams::atol`
+(default 1e-14 per H nucleus). An abundance below `atol` follows the network
+qualitatively but is not error-controlled, and the diffusivities inherit that when
+the charged particles that set them all lie below `atol`. In collapse runs at
+ζ = 0 (`Nakauchi2021` at Z = 1e-2 and `Nakauchi2021_Minimal` at Z = 1e-5, where
+the gas-phase ions and electrons fall to 1e-22–1e-40 at n_H ≈ 10¹³–10¹⁶ cm⁻³),
+η_A at B = 1 G changes by up to 6 dex between `atol` = 1e-14, 1e-19, 1e-24 and
+1e-30 and has not converged at 1e-30. η_O changes by ≤ 0.05 dex there, and since
+η_O exceeds η_A by 2.4 decades or more wherever η_A moves, the magnetic Reynolds
+number v L / (η_O + η_A) changes by no more than η_O does. Lower `atol` before relying on η_A
+where the ionization is that low; it costs 3–9 times the run time at 1e-24.
+
 ---
 
 ## 2. Charged particles
