@@ -10,9 +10,29 @@ includes a simple estimate based on the chemistry timescale `t_chem`.
 ## Purpose
 
 Quantify the relative computational cost of each network variant so that
-the overhead of the metal-grain solver (89 species) compared to the
+the overhead of the metal-grain solver (95 species) compared to the
 zero-metal solver (23 species) can be estimated as a function of
 metallicity Z/Z☉ and density nH.
+
+---
+
+## Measurement record
+
+The per-step wall times come from the `PRIM_BENCH` / `METAL_BENCH` output of the
+collapse applications ([`parameters.md`](parameters.md)), which writes the time of
+every `chem_full_step` call to a CSV file. The scripts that run the benchmark set
+and draw the figures below are not distributed with ARCHE, so the figures are a
+record of one measurement rather than a procedure to reproduce:
+
+| Item | Value |
+|---|---|
+| Code | ARCHE 2.0.0 development tree (integrator as released) |
+| Compiler | Intel oneAPI icpx/icx 2025.0, `CMAKE_BUILD_TYPE=Release` (`-xHost -fp-model=precise`) |
+| Runs | 20 collapses (prim and metal, full and minimal), one at a time, once each |
+| Machine | not recorded |
+
+Timings depend on the machine and the load; compare ratios between networks
+measured in the same session, not absolute times across machines.
 
 ---
 
@@ -41,11 +61,11 @@ metallicity Z/Z☉ and density nH.
 | metal Z=1 | `metal_collapse` | 1 (solar) |
 | metal Z=3 | `metal_collapse` | 3 |
 
-The `metal Z=0` case isolates the cost of the larger network (89 species)
+The `metal Z=0` case isolates the cost of the larger network (95 species)
 independent of metallicity-dependent chemistry.
 
-Each metal case is run with both networks: the **full** 89-species network
-(`metal_collapse`) and the compact **minimal** 40-species network
+Each metal case is run with both networks: the **full** 95-species network
+(`metal_collapse`) and the compact **minimal** 44-species network
 (`arche_collapse_metal_minimal`).  In every figure below the two variants share
 a colour per metallicity and are distinguished by line/bar style — full is
 solid (and a solid bar), minimal is dashed (and a hatched bar).  This lets the
@@ -105,17 +125,17 @@ this repository to the total chemistry cost ratio `metal / prim`, although it
 still excludes hydro, gravity, I/O, and any timestep criteria outside the
 chemistry module.  Each metallicity shows a pair of bars — the solid bar is the
 full network and the hatched bar the minimal network — so the cost saved by the
-compact network is read off directly (roughly a factor of ~2 across the grid).
+compact network is read off directly.
 
 The cumulative value integrates the local estimate over the full benchmark
-density range, up to the `n_H = 10²³ cm⁻³` ceiling.  The integrand is largest
-in the high-density tail (`n_H ≳ 10¹⁸ cm⁻³`), where the gas is hot and the full
-89-species network — grain-surface reactions and a stiff implicit solve — is
-most expensive relative to prim.  That tail therefore **dominates** the
-cumulative ratio: integrating only up to `n_H ≈ 10²⁰ cm⁻³` gives ~400, whereas
-extending to `10²³ cm⁻³` raises it to ~1300.  The number is thus a property of
-the chosen density range as much as of the network, and should be read together
-with the `nH-T` trajectories above.
+density range, up to the `n_H = 10²³ cm⁻³` ceiling.  It is 4.4–6.7 for the full
+network and 0.52–0.93 for the minimal network.  The local estimate (bottom panel
+above) is largest at `n_H ~ 10⁸–10¹¹ cm⁻³` and near `10¹⁴ cm⁻³`; integrating
+only up to `n_H = 10²⁰ cm⁻³` gives 5.9–13.2 (full) and 0.89–2.3 (minimal).  A
+value below 1 means that the minimal network's longer `t_chem` more than offsets
+its per-step cost relative to prim.  The number is a property of the chosen
+density range as much as of the network, and should be read together with the
+`nH-T` trajectories above.
 
 ### Full vs minimal: per-step cost within each network
 
@@ -124,8 +144,8 @@ with the `nH-T` trajectories above.
 The figures above all reference the prim network.  This last one instead
 compares, **within each network**, the full and minimal variants directly:
 primordial (`prim_collapse`, 23 species, vs `arche_collapse_prim_minimal`,
-15 species) on the left, and metal-grain (`metal_collapse`, 89 species, vs
-`arche_collapse_metal_minimal`, 40 species) on the right.
+15 species) on the left, and metal-grain (`metal_collapse`, 95 species, vs
+`arche_collapse_metal_minimal`, 44 species) on the right.
 
 - The bar height is the **10th-percentile per-step wall time** [µs].  A low
   percentile is used deliberately: it estimates the per-call compute cost with
@@ -133,11 +153,13 @@ primordial (`prim_collapse`, 23 species, vs `arche_collapse_prim_minimal`,
   noisier — a single contended segment can shift it by an order of magnitude,
   occasionally even making the smaller network appear slower.
 - `×N` above each pair is the full/minimal speed-up.  The minimal network is
-  ≈1.45× faster for primordial and ≈1.5–1.7× faster for metal-grain, roughly
-  flat across metallicity.
-- The speed-up is well below the naive species-count ratio (e.g. `(89/40)³`):
-  the implicit solve is only one part of `chem_full_step`, and the per-call
-  fixed costs (rate evaluation, cooling, table lookups) are shared.
+  ≈2.3× faster for primordial (42 µs vs 18.5 µs) and ≈2.9–3.9× faster for
+  metal-grain (330–450 µs vs 100–125 µs).  The minimal per-step time is nearly
+  flat across metallicity, while the full one rises with Z (334 µs at Z = 0 to
+  449 µs at Z = 3), so the speed-up is largest at high metallicity.
+- The speed-up is below the naive species-count ratio (e.g. `(95/44)³`): the
+  implicit solve is only one part of `chem_full_step`, and the per-call fixed
+  costs (rate evaluation, cooling, table lookups) are shared.
 
 ---
 
@@ -145,7 +167,7 @@ primordial (`prim_collapse`, 23 species, vs `arche_collapse_prim_minimal`,
 
 - Timing is measured around the `chem_full_step` call only; I/O and HDF5
   output are excluded.
-- The `metal Z=0` model shows the overhead of the 89-species network
+- The `metal Z=0` model shows the overhead of the 95-species network
   itself, irrespective of metal chemistry.
 - At high density (nH ≳ 10¹⁰ cm⁻³), per-step time can increase due to
   grain surface reactions and additional line-cooling terms activated in

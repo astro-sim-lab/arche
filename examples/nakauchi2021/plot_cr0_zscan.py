@@ -14,7 +14,7 @@ Panels:
   [2] y(H2) + y(HD) vs nH  (merged; H2=solid, HD=dashed)
   [3] y(Gr)   vs nH    (y: 1e-20–auto)
 
-Species indices (0-based, metal_grain N_sp=89):
+Species indices (0-based, metal_grain N_sp=95):
   e-  = 2
   H2  = 1
   HD  = 12
@@ -60,7 +60,7 @@ def load_h5(path):
         # name so this example works on both new and old .h5 files.
         nH  = f["nH"][:] if "nH" in f else f["xnH"][:]
         T_K = f["T_K"][:]
-        y   = f["y"][:]   # (N, 89)
+        y   = f["y"][:]   # (N, 95)
     return nH, T_K, y
 
 
