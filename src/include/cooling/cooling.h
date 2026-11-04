@@ -9,6 +9,7 @@
 //
 // All Lambda values are specific cooling rates [erg g⁻¹ s⁻¹]
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 
@@ -243,7 +244,10 @@ inline double fesc_HD(double Nc_HD, double T_K) {
       b0 + lgT * (b1 + lgT * (b2 + lgT * (b3 + lgT * (b4 + lgT * b5))));
   double Ncr = std::pow(10.0, lgNc);
 
-  return 1.0 / std::pow(1.0 + Nc_HD / Ncr, alpha);
+  // The alpha(T) fit turns negative above T ≈ 6.8e3 K, where 1/(1 + N/Ncr)^alpha
+  // exceeds 1 and, for a large column, overflows to inf.  An escape fraction is at
+  // most 1.
+  return std::min(1.0, 1.0 / std::pow(1.0 + Nc_HD / Ncr, alpha));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -284,11 +288,16 @@ inline double hd_cooling(double nH, double T_K, double rho, double y_HD,
     L0_HD = std::pow(10.0, lgL);
   }
 
+  // Continuum attenuation; 0 when exp(-tau_cnt) underflows (an optically thick
+  // continuum), so that no other factor can make the product 0 * inf.
+  const double atten = std::exp(-tau_cnt);
+  if (atten == 0.0) return 0.0;
+
   // Line escape fraction
   double fesc = fesc_HD(Nc_HD, T_K);
 
   // Specific cooling rate [erg g⁻¹ s⁻¹]
-  return L0_HD * y_HD * nH * fesc * std::exp(-tau_cnt) / rho;
+  return L0_HD * y_HD * nH * fesc * atten / rho;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
