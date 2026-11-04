@@ -211,7 +211,19 @@ template <class Model>
 void release_start(const GrainRelease<Model>& rel, double h,
                    std::array<double, Model::N_sp>& y) {
   using Sp = typename Model::Sp;
-  for (int i = 0; i < Model::N_sp; ++i) y[i] += h * rel.src[i];
+  for (int i = 0; i < Model::N_sp; ++i) {
+    y[i] += h * rel.src[i];
+    // A reservoir the release drains (src < 0) cannot go below 0.  y + h * src can fall below 0
+    // when h reaches what is left of the call, because the reservoir sits a few eps of the amount
+    // the call releases off its schedule.  Two sources were found.  (a) The first attempt
+    // (h = dt): src = -y0 / dt is rounded, so y0 + dt * src is not exactly 0, and the sign of the
+    // residue depends on whether the build fuses the multiply-add.  (b) Later substeps: conservation::project
+    // shares an element row's repair among its carriers, the reservoirs included, and the offset
+    // it leaves stays because the release rate is constant.  The Saha start state must be
+    // non-negative (saha_at); the clamp brings the input to the reservoir's physical bound before
+    // that test runs.
+    if (rel.src[i] < 0.0 && y[i] < 0.0) y[i] = 0.0;
+  }
   const double decay = 1.0 + h * rel.k;
   y[Sp::Gr] /= decay;
   y[Sp::Grp] /= decay;

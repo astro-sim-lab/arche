@@ -1,0 +1,201 @@
+# Copyright (C) 2026 Shingo Hirano and Sho Higashi
+# Licensed under the MIT found in the
+# https://github.com/astro-sim-lab/arche/blob/main/LICENSE
+#
+# Collapse tests on every pull request (see tests/collapse/ and
+# tools/ci/run_local.sh, which runs the same cells on a local machine).
+#
+#   grid     the grid G (160 cells) on g++ -march=x86-64-v3, in 8 shards
+#   subset   the subset S (16 cells) on icpx -march=x86-64-v3 and on g++ without -march (FMA off)
+#   build    ARCHE_XRAY=ON build, install + integration/ consumers
+#   lint     mypy --strict and ruff on tests/collapse, self-test of the J3 comparison
+#   report   all shards together (G3) and the cross-build comparison of S (J3)
+#
+# AVX-512 builds (-march=x86-64-v4) are not run here because the hosted
+# runners need not have AVX-512; run tools/ci/run_local.sh --march x86-64-v4
+# on such a machine.
+
+name: collapse-tests
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: collapse-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  APT_PACKAGES: cmake g++ libeigen3-dev libhdf5-dev python3-numpy python3-h5py
+
+jobs:
+  grid:
+    name: G, g++ x86-64-v3 (${{ matrix.shard }}/8)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends $APT_PACKAGES
+      - name: CPU
+        run: grep -m1 "model name" /proc/cpuinfo; nproc
+      - name: Build and run
+        run: >
+          tools/ci/run_local.sh --compiler gcc --march x86-64-v3 --subset G
+          --shard ${{ matrix.shard }}/8 --build-dir build --out-dir results/gcc-v3
+          --title "G, g++ x86-64-v3, shard ${{ matrix.shard }}/8"
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gcc-v3-shard-${{ matrix.shard }}
+          path: |
+            results/gcc-v3/results.json
+            results/gcc-v3/*/trace.npz
+            results/gcc-v3/*/stdout.log
+          if-no-files-found: warn
+
+  subset:
+    name: S, ${{ matrix.label }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: icx-v3
+            compiler: icx
+            march: x86-64-v3
+          - label: gcc-nomarch
+            compiler: gcc
+            march: ""
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends $APT_PACKAGES
+      - name: Install Intel oneAPI C++ compiler
+        if: matrix.compiler == 'icx'
+        run: |
+          wget -qO- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB \
+            | gpg --dearmor | sudo tee /usr/share/keyrings/oneapi-archive-keyring.gpg > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" \
+            | sudo tee /etc/apt/sources.list.d/oneAPI.list
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends intel-oneapi-compiler-dpcpp-cpp-2025.0
+      - name: CPU
+        run: grep -m1 "model name" /proc/cpuinfo; nproc
+      - name: Build and run
+        run: |
+          if [ "${{ matrix.compiler }}" = icx ]; then source /opt/intel/oneapi/setvars.sh; fi
+          tools/ci/run_local.sh --compiler ${{ matrix.compiler }} --march "${{ matrix.march }}" --subset S \
+            --build-dir build --out-dir results/${{ matrix.label }} --title "S, ${{ matrix.label }}"
+      - name: No Intel-only processor check in the binaries
+        if: matrix.compiler == 'icx'
+        run: |
+          exes=(build/src/apps/collapse_primordial/prim_collapse
+                build/src/apps/collapse_primordial/arche_collapse_prim_minimal
+                build/src/apps/collapse_metal_grain/metal_collapse
+                build/src/apps/collapse_metal_grain/arche_collapse_metal_minimal)
+          status=0
+          for exe in "${exes[@]}"; do
+            if [ ! -x "$exe" ]; then
+              echo "::error::$exe not found"; status=1; continue
+            fi
+            syms=$(nm "$exe") || { echo "::error::nm failed on $exe"; status=1; continue; }
+            if grep -q __intel_new_feature_proc_init <<< "$syms"; then
+              echo "::error::$exe contains __intel_new_feature_proc_init (built with an -x option)"; status=1
+            else
+              echo "$exe: no Intel-only processor check"
+            fi
+          done
+          exit $status
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.label }}
+          path: |
+            results/${{ matrix.label }}/results.json
+            results/${{ matrix.label }}/*/trace.npz
+            results/${{ matrix.label }}/*/stdout.log
+          if-no-files-found: warn
+
+  build:
+    name: XRAY build, install and consumers
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends $APT_PACKAGES
+      - name: Build with ARCHE_XRAY=ON
+        run: |
+          cmake -S . -B build-xray -DCMAKE_BUILD_TYPE=Release -DARCHE_MARCH=x86-64-v3 -DARCHE_XRAY=ON
+          cmake --build build-xray -j "$(nproc)"
+      - name: Install libarche
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DARCHE_MARCH=x86-64-v3
+          cmake --build build -j "$(nproc)" --target arche
+          cmake --install build --prefix "$PWD/_prefix"
+          if grep -q INTERFACE_COMPILE_OPTIONS _prefix/lib*/cmake/arche/archeTargets.cmake; then
+            echo "::error::archeTargets.cmake exports compile options to consumers"; exit 1
+          fi
+      - name: Build and run integration/ consumers
+        run: |
+          for app in cpp_minimal c_minimal; do
+            cmake -S integration/$app -B integration/$app/build \
+              -DCMAKE_PREFIX_PATH="$PWD/_prefix" -DCMAKE_BUILD_TYPE=Release
+            cmake --build integration/$app/build
+            ./integration/$app/build/$app data/primordial.h5 | tee "$app.out"
+            grep -q "solver_failed=0" "$app.out"
+          done
+
+  lint:
+    name: Lint (tests/collapse)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: mypy --strict and ruff
+        run: |
+          python3 -m venv /tmp/lint
+          /tmp/lint/bin/pip install --quiet mypy==2.4.1 ruff==0.15.4 numpy h5py
+          /tmp/lint/bin/mypy --strict tests/collapse
+          /tmp/lint/bin/ruff check --line-length 120 tests/collapse
+          /tmp/lint/bin/ruff format --check --line-length 120 tests/collapse
+          /tmp/lint/bin/python tests/collapse/check_runs.py --self-test
+
+  report:
+    name: Report (all shards, cross-build)
+    needs: [grid, subset]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends python3-numpy
+      - uses: actions/download-artifact@v4
+        with:
+          path: results/ci
+      - name: G, all shards
+        run: >
+          python3 tests/collapse/check_runs.py results/ci/gcc-v3-shard-*
+          --title "G, g++ x86-64-v3, all shards" --summary "$GITHUB_STEP_SUMMARY"
+      - name: S, cross-build comparison
+        run: |
+          ref=$(ls -d results/ci/gcc-v3-shard-* | paste -sd, -)
+          python3 tests/collapse/check_runs.py --compare "$ref" results/ci/icx-v3 results/ci/gcc-nomarch \
+            --title "S, cross-build (reference g++ x86-64-v3)" --summary "$GITHUB_STEP_SUMMARY"

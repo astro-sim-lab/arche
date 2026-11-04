@@ -28,6 +28,7 @@ For setup and full usage details, see:
 - `docs/magnetic_resistivity.md` (Ohmic and ambipolar diffusivities)
 - `integration/README.md` (using ARCHE as a library)
 - `docs/release_notes.md` (changes between releases, migration from 1.x)
+- `tests/collapse/README.md` (collapse tests run on every pull request, and locally with `tools/ci/run_local.sh`)
 
 Official companion tool:
 - [ResiTable](https://github.com/astro-sim-lab/resitable)

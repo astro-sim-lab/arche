@@ -1,9 +1,19 @@
 cmake_minimum_required(VERSION 3.18)
-project(arche VERSION 2.0.0 LANGUAGES C CXX)
+project(arche VERSION 2.0.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_VERBOSE_MAKEFILE ON)
+
+# Default to an optimized build when ARCHE is the top-level project and no
+# build type is given (single-config generators only).  An embedding project
+# keeps its own CMAKE_BUILD_TYPE.
+get_property(ARCHE_MULTI_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR AND NOT ARCHE_MULTI_CONFIG AND NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING
+        "Build type (Debug, Release, RelWithDebInfo, MinSizeRel)" FORCE)
+    message(STATUS "arche: CMAKE_BUILD_TYPE not set; using Release")
+endif()
 
 include(GNUInstallDirs)
 
@@ -58,12 +68,48 @@ target_compile_definitions(arche PUBLIC
     ARCHE_USE_EIGEN
     $<$<BOOL:${ARCHE_XRAY}>:ARCHE_XRAY>
 )
-target_compile_options(arche PUBLIC
-    $<$<CONFIG:Release>:
-        $<$<CXX_COMPILER_ID:GNU>: -march=native>
-        $<$<CXX_COMPILER_ID:IntelLLVM>: -xHost -fp-model=precise>
-    >
-)
+
+# --- target CPU and floating-point model ---
+# ARCHE_MARCH is passed as -march=<value> to every C++ source of libarche and
+# of the bundled applications, in every build type.  "native" (default) targets
+# the CPU of the build machine.  When the machines that run ARCHE differ from
+# the build machine (e.g. a login node and compute nodes of different CPUs),
+# name the run machines' instruction set instead, e.g. x86-64-v3 (AVX2) or
+# x86-64-v4 (AVX-512).  An empty value adds no -march flag (compiler default).
+#
+# Intel oneAPI icpx additionally gets -fp-model=precise, because its default
+# floating-point model allows value-changing optimizations.  -march is used for
+# icpx as well, not -x<code>/-xHost: the -x options embed an Intel-only
+# processor check, and the resulting binaries abort on AMD processors.
+#
+# These flags are not exported through arche::arche: a project that links
+# libarche keeps its own CPU and floating-point settings.  The bundled
+# applications receive them as directory options in src/CMakeLists.txt, so
+# that the kernel templates they instantiate are compiled exactly as libarche.
+set(ARCHE_MARCH "native" CACHE STRING
+    "Target CPU passed as -march=<value> (empty: no -march flag)")
+set(ARCHE_CPU_FLAGS "")
+if(CMAKE_CXX_COMPILER_ID MATCHES "^(GNU|Clang|IntelLLVM)$")
+    if(NOT ARCHE_MARCH STREQUAL "")
+        list(APPEND ARCHE_CPU_FLAGS "-march=${ARCHE_MARCH}")
+    endif()
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "IntelLLVM")
+        list(APPEND ARCHE_CPU_FLAGS "-fp-model=precise")
+    endif()
+else()
+    message(WARNING "arche: no CPU or floating-point flags are set for the C++ "
+                    "compiler '${CMAKE_CXX_COMPILER_ID}' (supported: GNU, Clang, "
+                    "IntelLLVM). The classic Intel compiler (icpc) is not supported; use icpx.")
+endif()
+# C++ sources only: C sources are compiled by the C compiler, which need not
+# accept these flags.
+set(ARCHE_CXX_CPU_FLAGS "")
+foreach(flag IN LISTS ARCHE_CPU_FLAGS)
+    list(APPEND ARCHE_CXX_CPU_FLAGS "$<$<COMPILE_LANGUAGE:CXX>:${flag}>")
+endforeach()
+message(STATUS "arche: C++ compiler ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}, "
+               "CPU/floating-point flags: ${ARCHE_CPU_FLAGS}")
+target_compile_options(arche PRIVATE ${ARCHE_CXX_CPU_FLAGS})
 # Warnings are PRIVATE: they apply to libarche's own translation units and are
 # not forced on projects that link arche::arche.
 target_compile_options(arche PRIVATE

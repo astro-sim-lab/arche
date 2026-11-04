@@ -23,12 +23,15 @@ __pycache__/
 *.pyc
 .venv/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
 # Block AI Related
 AGENTS.md
 CLAUDE.md
 .github/*
 !.github/PULL_REQUEST_TEMPLATE.md
+!.github/workflows/
 .codex/
 .codex
 .claude/
