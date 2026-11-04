@@ -1,5 +1,85 @@
 # Release notes
 
+## 2.0.1
+
+ARCHE 2.0.1 fixes the switch of the grain reactions, the Newton iteration of the
+metal network, the HD line cooling above T ≈ 6.8e3 K and the start of a Saha step
+of the grain evaporation, and builds with Intel `icpx` on AMD processors. The
+library API and ABI are those of 2.0.0. Numerical output is not bit-identical to
+2.0.0; each fix below states how much the results change.
+
+### Fixes
+
+- The grain reactions of the metal networks (grain charge transfer and
+  grain-surface reactions) are switched off when the grain volume falls below
+  1e-10 of the volume of the cold grains, instead of at a grain temperature of
+  1.025 max(T_ir, T_pyr, T_ol). The old switch is where an earlier, linear
+  grain-volume law reached zero; with the current law about 2% of the grains
+  remain there, and the step in the chemical cooling held the gas temperature at
+  the switch: a metal Minimal collapse with Z = 1 Z☉, ζ = 1e-15 s⁻¹ and
+  f_ret = 10 took 124 s and now takes 21 s. The rates already scale with the
+  remaining grains, so the new switch is a negligible step. While grains remain
+  they keep capturing electrons, which removes a jump of the electron abundance
+  by up to 4 dex at the old switch. T changes by at most 2.8e-3 dex (metal
+  Minimal, Z = 1 Z☉) and 2.8e-6 dex (metal full); the abundances of e⁻, Mg⁺ and
+  the charged grains change within 0.1–0.7 dex of n_H around the grain
+  evaporation (n_H ≈ 1e15–1e17 cm⁻³). The primordial networks are unchanged.
+- The Newton iterations of the metal network (`Nakauchi2021`) include how the
+  grain-surface rate coefficients depend on the physisorbed H2 and H2O and on the
+  chemisorbed H and D (surface coverage). Without it the iteration for the
+  physisorbed H2 oscillated where its desorption depends on its own coverage, and
+  every step fell back to the slower fixed-temperature solve: a metal collapse with
+  Z = 1 Z☉ and ζ = 1e-15 s⁻¹ took up to 24 min and now takes under 2 min. The
+  equations are unchanged; the results change within the solver tolerance (T by
+  less than 1e-3 dex, abundances above 1e-10 by less than 1e-2 dex, except where a
+  steep front moves by at most 0.005 dex in n_H). The minimal networks and the
+  primordial networks are unchanged.
+- The HD line escape fraction is bounded by 1. Its α(T) fit turns negative above
+  T ≈ 6.8e3 K, where the formula gives an escape fraction above 1 and, for a large
+  HD column, overflows. Where the continuum is optically thick enough that
+  exp(−τ_cnt) underflows to 0, the HD cooling is now 0 instead of 0 · ∞ = NaN. The
+  NaN had stopped metal collapses with `solver_failed` (exit code 5) near
+  n_H ≈ 2.6e22 cm⁻³ and T ≈ 1.7e4 K, for example Z = 1e-5 Z☉ with f_ret = 10.
+  In collapses that did not stop, T changes by at most 9e-13 dex.
+- A step of the grain evaporation in its Saha regime (n_H > 1e18 cm⁻³) starts
+  from non-negative amounts of the metals still locked in the grains. On the last
+  step of a complete evaporation, an amount that the release drains could start a
+  rounding error below 0; the step was then rejected and the collapse stopped with
+  `solver_failed` (exit code 5). Whether this happened depended on whether the
+  build fuses multiply-adds: with `g++ -march=native` it stopped the metal
+  collapses with f_ret = 10, Z = 1e-3, 1e-4 and 1e-6 Z☉ and ζ = 1e-19, 1e-17 and
+  1e-15 s⁻¹, which now reach n_H = 1e20 cm⁻³. Only the start of that step
+  changes; collapses that did not stop change by less than 1e-9 (relative).
+
+### Build
+
+- With Intel `icpx`, ARCHE compiles with `-march=native` instead of `-xHost`.
+  The `-x` options embed an Intel-only processor check, so a binary built with
+  `-xHost` aborts on AMD processors. On an Intel processor the two flags gave
+  bit-identical output in the four collapses compared (primordial and metal,
+  full and minimal networks).
+- New CMake cache variable `ARCHE_MARCH` (default `native`) sets the
+  `-march=<value>` flag; an empty value adds none. See
+  [Getting Started](getting_started.md#target-cpu-arche_march).
+- The CPU and floating-point flags (`-march`, and `-fp-model=precise` with
+  `icpx`) are applied in every build type, not only `Release`. An unset
+  `CMAKE_BUILD_TYPE` defaults to `Release` when ARCHE is the top-level project.
+- These flags are no longer part of the usage requirements of `arche::arche`.
+  A project that links libarche (installed, or through `add_subdirectory`)
+  keeps its own CPU and floating-point flags; before, it received `-march=native`
+  (GNU) or `-xHost -fp-model=precise` (`icpx`) in its `Release` build.
+
+### Tests
+
+- New collapse tests in [`tests/collapse/`](../tests/collapse/README.md): 160
+  one-zone collapses over the four networks, ζ, f_ret, Z and J_LW21, each of which
+  must reach n_H = 1e23 cm⁻³ normally within a wall-time gate, and a comparison of
+  the temperature tracks of 16 of them across builds (`icpx`, and `g++` without
+  `-march`). `tools/ci/run_local.sh` builds ARCHE and runs them on a local machine.
+- The GitHub Actions workflow `.github/workflows/collapse-tests.yml` runs them on
+  every pull request, together with an `ARCHE_XRAY=ON` build and the
+  [`integration/`](../integration/README.md) consumers of an installed ARCHE.
+
 ## 2.0.0
 
 ARCHE 2.0.0 solves every model with one error-controlled integrator, moves the

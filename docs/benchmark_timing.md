@@ -26,8 +26,8 @@ record of one measurement rather than a procedure to reproduce:
 
 | Item | Value |
 |---|---|
-| Code | ARCHE 2.0.0 development tree (integrator as released) |
-| Compiler | Intel oneAPI icpx/icx 2025.0, `CMAKE_BUILD_TYPE=Release` (`-xHost -fp-model=precise`) |
+| Code | ARCHE 2.0.1 |
+| Compiler | Intel oneAPI icpx/icx 2025.0, `CMAKE_BUILD_TYPE=Release` (`-march=native -fp-model=precise`) |
 | Runs | 20 collapses (prim and metal, full and minimal), one at a time, once each |
 | Machine | not recorded |
 
@@ -128,10 +128,10 @@ full network and the hatched bar the minimal network — so the cost saved by th
 compact network is read off directly.
 
 The cumulative value integrates the local estimate over the full benchmark
-density range, up to the `n_H = 10²³ cm⁻³` ceiling.  It is 4.4–6.7 for the full
-network and 0.52–0.93 for the minimal network.  The local estimate (bottom panel
+density range, up to the `n_H = 10²³ cm⁻³` ceiling.  It is 4.1–5.6 for the full
+network and 0.51–0.86 for the minimal network.  The local estimate (bottom panel
 above) is largest at `n_H ~ 10⁸–10¹¹ cm⁻³` and near `10¹⁴ cm⁻³`; integrating
-only up to `n_H = 10²⁰ cm⁻³` gives 5.9–13.2 (full) and 0.89–2.3 (minimal).  A
+only up to `n_H = 10²⁰ cm⁻³` gives 5.5–14.7 (full) and 0.82–1.5 (minimal).  A
 value below 1 means that the minimal network's longer `t_chem` more than offsets
 its per-step cost relative to prim.  The number is a property of the chosen
 density range as much as of the network, and should be read together with the
@@ -153,10 +153,10 @@ primordial (`prim_collapse`, 23 species, vs `arche_collapse_prim_minimal`,
   noisier — a single contended segment can shift it by an order of magnitude,
   occasionally even making the smaller network appear slower.
 - `×N` above each pair is the full/minimal speed-up.  The minimal network is
-  ≈2.3× faster for primordial (42 µs vs 18.5 µs) and ≈2.9–3.9× faster for
-  metal-grain (330–450 µs vs 100–125 µs).  The minimal per-step time is nearly
-  flat across metallicity, while the full one rises with Z (334 µs at Z = 0 to
-  449 µs at Z = 3), so the speed-up is largest at high metallicity.
+  ≈2.3× faster for primordial (43 µs vs 18.6 µs) and ≈3.7–4.3× faster for
+  metal-grain (427–473 µs vs 104–121 µs).  Both per-step times depend only
+  weakly on metallicity: the full one is 427 µs at Z = 0 and 473 µs at Z = 3,
+  the minimal one 104–121 µs.
 - The speed-up is below the naive species-count ratio (e.g. `(95/44)³`): the
   implicit solve is only one part of `chem_full_step`, and the per-call fixed
   costs (rate evaluation, cooling, table lookups) are shared.
