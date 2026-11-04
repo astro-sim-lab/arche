@@ -27,6 +27,29 @@ cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=icpx -DCMAKE
 cmake --build build -j$(nproc)
 ```
 
+With `icpx`, ARCHE also compiles with `-fp-model=precise`. The classic Intel
+compiler (`icpc`) is not supported.
+
+### Target CPU (`ARCHE_MARCH`)
+
+ARCHE compiles libarche and the bundled applications with `-march=<ARCHE_MARCH>`
+in every build type. The default `native` targets the CPU of the build machine.
+If the machines that run ARCHE have a different CPU (for example, a login node
+and compute nodes of different generations or vendors), set the instruction set
+of the run machines:
+
+```bash
+cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DARCHE_MARCH=x86-64-v4   # AVX-512
+cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DARCHE_MARCH=x86-64-v3   # AVX2
+cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DARCHE_MARCH=            # no -march flag
+```
+
+The level names `x86-64-v3` and `x86-64-v4` require GCC >= 11, Clang >= 12 or
+`icpx`. A CPU name accepted by the compiler (e.g. `znver4`, `sapphirerapids`)
+also works. These flags apply only to ARCHE's own targets: a project that links
+`arche::arche` keeps its own CPU and floating-point flags. When
+`CMAKE_BUILD_TYPE` is not given, ARCHE builds as `Release`.
+
 Binaries are generated under `build/src/apps/...`: the collapse applications
 (`prim_collapse`, `arche_collapse_prim_minimal`, `metal_collapse`,
 `arche_collapse_metal_minimal`), the standalone chemistry demos (`prim_chem`,
