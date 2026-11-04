@@ -715,6 +715,49 @@ void evaluate(const Context<Model>& c, const std::array<double, Model::N_sp>& y,
              c.e0;
 }
 
+// The coefficients' share of the Jacobian. compute_jacobian differentiates the
+// mass-action terms at fixed rate coefficients, but in the models with grain-surface
+// coverage (has_uv_shield) the grain-surface coefficients read the abundances of the
+// physisorbed H2 and H2O and of the chemisorbed H and D (base_rates). The H2 desorption
+// coefficient, for one, changes from exp(-300/T_gr) on a bare surface to exp(-100/T_gr)
+// on an H2-covered one, so the desorption rate grows faster than linearly in the
+// physisorbed H2; without its share the Newton step for that species can overshoot by
+// a factor of two and oscillate. This adds to J, for each of those species j, the change
+// of the rates at fixed y when y_j moves the coefficients alone: a forward difference
+// of the coefficients with the step of the energy row's abundance columns. A reaction
+// whose coefficient does not change contributes exactly zero.
+template <class Model>
+void add_coverage_jacobian(const Context<Model>& c,
+                           const std::array<double, Model::N_sp>& y, double T,
+                           double T_gr,
+                           const std::array<double, 2 * Model::N_react>& k,
+                           std::array<double, Model::N_sp * Model::N_sp>& J) {
+  if constexpr (Model::has_uv_shield) {
+    using Sp = typename Model::Sp;
+    constexpr int N = Model::N_sp;
+    std::array<double, N> r0{}, r1{};
+    std::array<double, 2 * Model::N_react> var{}, k1{};
+    compute_rhs<Model>(k, c.nH, y, *c.tbl, r0, var);
+    const int cover[] = {Sp::H2_p, Sp::H2O_p, Sp::H_c, Sp::D_c};
+    for (int j : cover) {
+      const double dy = kFdYRel * std::max(std::abs(y[j]), kFdYFloor);
+      std::array<double, N> y1 = y;
+      y1[j] += dy;
+      base_rates<Model>(c, y1, T, T_gr, k1);
+      if (k1 == k) continue;
+      compute_rhs<Model>(k1, c.nH, y, *c.tbl, r1, var);
+      for (int i = 0; i < N; ++i) J[i * N + j] += (r1[i] - r0[i]) / dy;
+    }
+  } else {
+    (void)c;
+    (void)y;
+    (void)T;
+    (void)T_gr;
+    (void)k;
+    (void)J;
+  }
+}
+
 // The Jacobian at (y, T) of the evaluation ev made there: the reactions' part from ev's
 // rate coefficients -- taken from the cache where the point's entry already has it, and
 // kept there otherwise -- plus the sinks'. Most evaluations never need it (the
@@ -730,6 +773,7 @@ void ensure_jacobian(const Context<Model>& c,
     ev.J = e->J;
   } else {
     compute_jacobian<Model>(ev.k, c.nH, y, *c.tbl, ev.J);
+    add_coverage_jacobian<Model>(c, y, T, ev.rad_end.T_gr, ev.k, ev.J);
     if (e) {
       e->J = ev.J;
       e->has_J = true;
@@ -1081,6 +1125,7 @@ bool species_at_T(const Context<Model>& c, double T,
     ++newton;
     base_rates<Model>(c, y, T, rc.T_gr, k);
     compute_rates<Model>(k, c.nH, y, *c.tbl, r, J, var);
+    add_coverage_jacobian<Model>(c, y, T, rc.T_gr, k, J);
     if (c.release) add_grain_sinks<Model>(*c.release, y, r, J);
     if (c.lw) add_lw_sinks<Model>(lw, y, r, &J);
     std::array<double, N> d{};
