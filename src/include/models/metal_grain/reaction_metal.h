@@ -801,9 +801,12 @@ inline void compute_grain_rates(K& k_rxn, double T_K, double T_gr_K, double rho,
                                 double T_cr_desorp) {
   constexpr int gcb = metal_grain::slot::grain_charge_begin;
   constexpr int gsb = metal_grain::slot::grain_surface_begin;
-  double T_ice, T_vo, T_ro, T_tr, T_ir, T_pyr, T_ol;
-  detail::vaptemp(rho, T_ice, T_vo, T_ro, T_tr, T_ir, T_pyr, T_ol);
-  double T_evap = std::max({T_ir, T_pyr, T_ol});
+  // Grain volume, relative to the cold grains, below which the grain reactions
+  // are switched off.  Above it the rates already scale with the remaining grains
+  // (surface: alpha_MRN ∝ vol_gr; charge: the grain species decay with vol_gr),
+  // so the switch is a negligible step.  Results do not depend on it for values
+  // <= 1e-8; keeping the reactions to much smaller volumes only slows the solver.
+  constexpr double kGrainVolumeFloor = 1.0e-10;
 
   // Only the entries the sink keeps are evaluated; kgr[128] also feeds k_rxn[143].
   std::array<double, metal_grain::slot::grain_charge_count> k_charge;
@@ -816,7 +819,8 @@ inline void compute_grain_rates(K& k_rxn, double T_K, double T_gr_K, double rho,
                             (i == 128 && k_rxn.want(143));
                    });
 
-  if (T_gr_K >= 1.025 * T_evap) {
+  if (detail::vol_gr(rho, T_gr_K) <
+      kGrainVolumeFloor * detail::vol_gr(rho, 2.725)) {
     k_charge.fill(0.0);
     kgr.fill(0.0);
   }
